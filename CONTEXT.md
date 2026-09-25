@@ -23,4 +23,4 @@ The existing filesystem-backed Code OSS workspace prepared through `/navigator`.
 Desktop-owned configuration naming a Review Server URL, its Source Access Mode, and any external source opener. Profile metadata lives in ordinary settings; its Review Server Token is stored separately as a secret.
 
 **Review Server Token**:
-A bearer secret required by the Review Server's HTTP and WebSocket APIs. The current server generates a process-scoped token at startup and writes it to its local discovery record. It is not a Pi, GitHub, SSH, Tailscale, or model-provider credential.
+A bearer secret required by the Review Server's HTTP and WebSocket APIs. It is operator-configured and restart-stable for durable headless connections, or server-generated and process-scoped for local and ephemeral operation; it is not a Pi, GitHub, SSH, Tailscale, or model-provider credential.

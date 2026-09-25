@@ -266,7 +266,11 @@ export async function runReviewCli(input: ReviewCliInput): Promise<number> {
         "allow the authoring skill to generate optional software maps",
       )
       // Batch authoring was removed; name that instead of "unknown option".
-      .addOption(new Option("--authoring-mode <mode>").hideHelp()),
+      .addOption(new Option("--authoring-mode <mode>").hideHelp())
+      .addHelpText(
+        "after",
+        "\nSet DEV_REVIEW_SERVER_TOKEN in the server environment to keep its bearer credential stable across restarts. If unset, each process generates a new credential.\n",
+      ),
     "plain",
   ).action(async (_options, command: Command) => {
     const options = command.optsWithGlobals<{
@@ -297,6 +301,7 @@ export async function runReviewCli(input: ReviewCliInput): Promise<number> {
         stateDir,
         port,
         softwareMapEnabled: options.softwareMaps,
+        token: env.DEV_REVIEW_SERVER_TOKEN,
         signal: controller.signal,
         telemetry,
         onReady: ({ url, serverPid }) => {

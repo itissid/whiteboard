@@ -10,7 +10,9 @@ import {
   withFileLock,
   writePrivateJsonAtomic,
 } from "@dev.fast/trace-core";
+import { createAdaptorServer, upgradeWebSocket } from "@hono/node-server";
 import { Hono } from "hono";
+import { WebSocketServer } from "ws";
 
 import { createReviewApi } from "../review-api/http.js";
 import { openReviewProfile } from "../review-api/profile.js";
@@ -20,11 +22,7 @@ import {
   reviewServerDiscoveryPath,
 } from "../server-discovery.js";
 import { mountSharingPublisher } from "../sharing/host.js";
-import {
-  type ReviewHonoEnv,
-  createNodeRequestListener,
-  isAuthorizedRequest,
-} from "./hono-http.js";
+import { type ReviewHonoEnv, isAuthorizedRequest } from "./hono-http.js";
 import {
   drainServerCrashReport,
   installProcessErrorTelemetry,
@@ -35,6 +33,7 @@ interface HeadlessServerInput {
   stateDir: string;
   port?: number;
   softwareMapEnabled?: boolean;
+  token?: string;
   signal: AbortSignal;
   /** The CLI's instance, already on the `headless` surface. */
   telemetry?: Pick<ReviewTelemetryCapture, "captureUiEvent">;
@@ -81,7 +80,7 @@ async function serve(input: HeadlessServerInput) {
     instanceId: randomUUID(),
     url: "http://127.0.0.1:0",
     serverPid: process.pid,
-    token: randomBytes(32).toString("base64url"),
+    token: input.token ?? randomBytes(32).toString("base64url"),
   };
 
   const app = new Hono<ReviewHonoEnv>();
@@ -92,6 +91,14 @@ async function serve(input: HeadlessServerInput) {
   });
   app.get("/health", (context) =>
     context.json({ ok: true, instanceId: discovery.instanceId }),
+  );
+  app.get(
+    "/health/websocket",
+    upgradeWebSocket(() => ({
+      onOpen(_event, webSocket) {
+        webSocket.close(1000);
+      },
+    })),
   );
 
   // Headless shares Desktop's database, so it lists the pad on the same
@@ -115,7 +122,15 @@ async function serve(input: HeadlessServerInput) {
   mountSharingPublisher(api, local.store, local.data);
   app.route("/reviews-api", api);
 
-  const server = createServer(createNodeRequestListener(app));
+  const webSocketServer = new WebSocketServer({ noServer: true });
+
+  // SAFETY: createAdaptorServer uses the supplied node:http createServer.
+  const server = createAdaptorServer({
+    createServer,
+    fetch: app.fetch,
+    websocket: { server: webSocketServer },
+  }) as ReturnType<typeof createServer>;
+
   let published = false;
 
   try {
