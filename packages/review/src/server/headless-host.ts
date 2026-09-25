@@ -11,9 +11,12 @@ import {
   writePrivateJsonAtomic,
 } from "@dev.fast/trace-core";
 import { createAdaptorServer, upgradeWebSocket } from "@hono/node-server";
-import { Hono } from "hono";
+import { type Context, Hono } from "hono";
+import { streamSSE } from "hono/streaming";
 import { WebSocketServer } from "ws";
+import { z } from "zod";
 
+import { ReviewInputError } from "../review-api/document.js";
 import { createReviewApi } from "../review-api/http.js";
 import { openReviewProfile } from "../review-api/profile.js";
 import { readScratchpadEnabled } from "../review-preferences.js";
@@ -22,7 +25,12 @@ import {
   reviewServerDiscoveryPath,
 } from "../server-discovery.js";
 import { mountSharingPublisher } from "../sharing/host.js";
-import { type ReviewHonoEnv, isAuthorizedRequest } from "./hono-http.js";
+import { GlobalReviewDesktopVerbRelay } from "./global-verb-relay.js";
+import {
+  type ReviewHonoEnv,
+  isAuthorizedRequest,
+  readBoundedRequestJson,
+} from "./hono-http.js";
 import {
   drainServerCrashReport,
   installProcessErrorTelemetry,
@@ -104,6 +112,7 @@ async function serve(input: HeadlessServerInput) {
     manageWorkspaces: false,
   });
 
+  const relay = new GlobalReviewDesktopVerbRelay();
   const discovery: ReviewServerDiscovery = {
     version: 1,
     instanceId: randomUUID(),
@@ -136,6 +145,14 @@ async function serve(input: HeadlessServerInput) {
   app.get("/health", (context) =>
     context.json({ ok: true, instanceId: discovery.instanceId }),
   );
+  app.get("/control", (context) => openControlEvents(context));
+  app.post("/control/result", async (context) => {
+    const accepted = relay.acceptResult(
+      await readBoundedRequestJson(context.req.raw),
+    );
+
+    return context.json({ ok: accepted }, accepted ? 200 : 404);
+  });
   app.get(
     "/health/websocket",
     upgradeWebSocket(() => ({
@@ -152,12 +169,41 @@ async function serve(input: HeadlessServerInput) {
   const api = createReviewApi(
     local.store,
     local.data,
+    async (review) => {
+      if (!relay.attached)
+        throw new ReviewInputError("The desktop is not connected.", 409);
+
+      const result = await relay.dispatch({
+        name: "openApiReview",
+        args: review,
+      });
+
+      if (!result.ok) throw new ReviewInputError(result.error, 409);
+
+      return z
+        .object({ softwareMapEnabled: z.boolean() })
+        .parse(result.result);
+    },
     undefined,
-    undefined,
-    () => ({
-      desktopAvailable: false,
-      softwareMapEnabled: input.softwareMapEnabled ?? false,
-    }),
+    async () => {
+      if (!relay.attached)
+        return {
+          desktopAvailable: false,
+          softwareMapEnabled: input.softwareMapEnabled ?? false,
+        };
+
+      const result = await relay.dispatch({
+        name: "authoringCapabilities",
+        args: {},
+      });
+
+      if (!result.ok) throw new ReviewInputError(result.error, 409);
+
+      return {
+        desktopAvailable: true,
+        ...z.object({ softwareMapEnabled: z.boolean() }).parse(result.result),
+      };
+    },
     () => scratchpadEnabled,
     () => traceMachineEnabled(),
     () => ({ key: "headless", home: input.stateDir }),
@@ -165,6 +211,75 @@ async function serve(input: HeadlessServerInput) {
 
   mountSharingPublisher(api, local.store, local.data);
   app.route("/reviews-api", api);
+
+  function openControlEvents(context: Context<ReviewHonoEnv>): Response {
+    if (relay.attached)
+      return context.json(
+        {
+          ok: false as const,
+          error: "A Review Desktop control client is already attached.",
+        },
+        409,
+      );
+
+    let attached = false;
+
+    const response = streamSSE(context, async (output) => {
+      let finish!: () => void;
+      const disconnected = new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+      const abort = new AbortController();
+      let pending: Promise<void> = output
+        .write(": attached\n\n")
+        .then(() => undefined);
+      const writer = {
+        signal: abort.signal,
+        write(frame: string) {
+          pending = pending.then(async () => {
+            await output.write(frame);
+          });
+        },
+        close() {
+          finish();
+          void output.close();
+        },
+      };
+
+      output.onAbort(() => {
+        abort.abort();
+        finish();
+      });
+      attached = relay.attach(writer);
+
+      if (!attached) {
+        finish();
+        return;
+      }
+
+      try {
+        await disconnected;
+        await pending;
+      } finally {
+        abort.abort();
+      }
+    });
+
+    if (!attached) {
+      void response.body?.cancel();
+      return context.json(
+        {
+          ok: false as const,
+          error: "A Review Desktop control client is already attached.",
+        },
+        409,
+      );
+    }
+
+    response.headers.set("cache-control", "no-cache, no-transform");
+    response.headers.set("content-type", "text/event-stream; charset=utf-8");
+    return response;
+  }
 
   const webSocketServer = new WebSocketServer({ noServer: true });
 
@@ -207,6 +322,7 @@ async function serve(input: HeadlessServerInput) {
       if (published)
         await rm(reviewServerDiscoveryPath(input.stateDir), { force: true });
     } finally {
+      relay.close();
       await new Promise<void>((resolve) => server.close(() => resolve()));
       clearTimeout(forceClose);
 

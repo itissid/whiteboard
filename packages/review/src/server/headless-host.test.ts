@@ -807,6 +807,148 @@ it("lets Whiteboard Desktop read authenticated and rejected headless responses",
   expect(rejected.headers.get("vary")).toContain("Origin");
 });
 
+it("accepts exactly one authenticated Whiteboard Desktop control stream", async () => {
+  const server = await start();
+  const controlUrl = new URL("/control", server.discovery.url);
+  controlUrl.searchParams.set("token", server.discovery.token);
+  const abort = new AbortController();
+  const first = await fetch(controlUrl, { signal: abort.signal });
+
+  expect(first.status).toBe(200);
+  expect(first.headers.get("content-type")).toBe(
+    "text/event-stream; charset=utf-8",
+  );
+  const reader = first.body!.getReader();
+  const attached = await reader.read();
+  expect(new TextDecoder().decode(attached.value)).toContain(": attached");
+
+  const second = await fetch(controlUrl);
+  expect(second.status).toBe(409);
+  expect(await second.json()).toMatchObject({
+    ok: false,
+    error: "A Review Desktop control client is already attached.",
+  });
+
+  abort.abort();
+  await reader.cancel().catch(() => undefined);
+});
+
+it("relays headless Desktop capabilities while its control stream is attached", async () => {
+  const server = await start();
+  const controlUrl = new URL("/control", server.discovery.url);
+  controlUrl.searchParams.set("token", server.discovery.token);
+  const abort = new AbortController();
+  const control = await fetch(controlUrl, { signal: abort.signal });
+  const reader = control.body!.getReader();
+  await reader.read();
+
+  const capabilities = server.client.read("/capabilities");
+  const event = await Promise.race([
+    reader.read(),
+    new Promise<never>((_resolve, reject) =>
+      setTimeout(() => reject(new Error("Control event timed out.")), 1_000),
+    ),
+  ]);
+  const frame = new TextDecoder().decode(event.value);
+  const envelope = JSON.parse(frame.slice("data: ".length)) as {
+    id: string;
+    request: { name: string };
+  };
+  expect(envelope.request.name).toBe("authoringCapabilities");
+
+  const result = await fetch(`${server.discovery.url}/control/result`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-review-token": server.discovery.token,
+    },
+    body: JSON.stringify({
+      id: envelope.id,
+      response: {
+        ok: true,
+        result: { softwareMapEnabled: true },
+      },
+    }),
+  });
+  expect(result.status).toBe(200);
+  expect(await capabilities).toMatchObject({
+    desktopAvailable: true,
+    softwareMapEnabled: true,
+  });
+
+  abort.abort();
+  await reader.cancel().catch(() => undefined);
+  await vi.waitFor(async () => {
+    expect(await server.client.read("/capabilities")).toMatchObject({
+      desktopAvailable: false,
+      softwareMapEnabled: false,
+    });
+  });
+});
+
+it("relays opening an API-only review to the attached Whiteboard Desktop", async () => {
+  const server = await start();
+  const repo = await repository();
+  const registered = await server.client.post<{ id: string }>("/repositories", {
+    path: repo.directory,
+  });
+  const created = await server.client.post<Result>("/commands", {
+    commandId: randomUUID(),
+    operation: {
+      type: "create",
+      title: "Remote review",
+      pins: { repositoryId: registered.id, base: repo.base, head: repo.head },
+    },
+  });
+
+  const controlUrl = new URL("/control", server.discovery.url);
+  controlUrl.searchParams.set("token", server.discovery.token);
+  const abort = new AbortController();
+  const control = await fetch(controlUrl, { signal: abort.signal });
+  const reader = control.body!.getReader();
+  await reader.read();
+
+  const opened = server.client.post(`/${created.reviewId}/open`, {});
+  const event = await Promise.race([
+    reader.read(),
+    new Promise<never>((_resolve, reject) =>
+      setTimeout(() => reject(new Error("Control event timed out.")), 1_000),
+    ),
+  ]);
+  const frame = new TextDecoder().decode(event.value);
+  const envelope = JSON.parse(frame.slice("data: ".length)) as {
+    id: string;
+    request: {
+      name: string;
+      args: { reviewId: string; title: string };
+    };
+  };
+  expect(envelope.request).toMatchObject({
+    name: "openApiReview",
+    args: { reviewId: created.reviewId, title: "Remote review" },
+  });
+
+  const result = await fetch(`${server.discovery.url}/control/result`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-review-token": server.discovery.token,
+    },
+    body: JSON.stringify({
+      id: envelope.id,
+      response: {
+        ok: true,
+        result: { softwareMapEnabled: true },
+      },
+    }),
+  });
+  expect(result.status).toBe(200);
+  expect(await opened).toMatchObject({ softwareMapEnabled: true });
+
+  abort.abort();
+  await reader.cancel().catch(() => undefined);
+});
+
 it("authenticates clients, reports capabilities and readiness without exposing the token, and diagnoses unavailable commits", async () => {
   const server = await start(undefined, true);
   expect(await reviewServerIsHealthy(server.discovery)).toBe(true);
