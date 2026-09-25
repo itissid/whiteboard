@@ -6,6 +6,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { REVIEW_DESKTOP_CONNECTION_VERSION } from "../common/reviewDesktopBootstrap.js";
 import { ReviewDesktopConnectionService } from "./reviewDesktopConnectionService.js";
 
 const uuid = "11111111-1111-4111-8111-111111111111";
@@ -46,6 +47,35 @@ function mockFetch(t: { after(callback: () => void): void }, handler: typeof fet
 		globalThis.fetch = original;
 	});
 }
+
+test("exposes the main process Source Access Mode without inferring it from a loopback URL", async (t) => {
+	const desktopConnection = {
+		version: REVIEW_DESKTOP_CONNECTION_VERSION,
+		url: "http://127.0.0.1:5000",
+		token: "token",
+		instanceId: "instance",
+		appSessionId: "app-session",
+		sourceAccessMode: "api-only",
+	} as const;
+	const mainProcessService = {
+		getChannel() {
+			return { call: () => Promise.resolve(desktopConnection) };
+		},
+	};
+	mockFetch(t, async (input) => {
+		assert.equal(String(input), `${desktopConnection.url}/health`);
+		return Response.json({ instanceId: desktopConnection.instanceId });
+	});
+	const service = new ReviewDesktopConnectionService(mainProcessService as never, new TestStorage() as never);
+	t.after(() => service.dispose());
+
+	assert.deepEqual(await service.getConnection(), {
+		serverUrl: desktopConnection.url,
+		token: desktopConnection.token,
+		appSessionId: desktopConnection.appSessionId,
+		sourceAccessMode: "api-only",
+	});
+});
 
 test("install status shares concurrent scans and refreshes on subsequent checks", async (t) => {
 	const service = serviceWith();

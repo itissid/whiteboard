@@ -19,6 +19,7 @@ test("posts named main-process telemetry through the embedded server", async () 
       token: "secret",
       instanceId: "instance",
       appSessionId: "launch-1",
+      sourceAccessMode: "shared-filesystem",
     }),
     isTelemetryEnabled: () => true,
     fetchImpl: async (_input, init) => {
@@ -67,6 +68,7 @@ test("queues an event captured before the server connects and posts it once", as
         token: "secret",
         instanceId: "instance",
         appSessionId: "launch-1",
+        sourceAccessMode: "shared-filesystem",
       };
     },
     isTelemetryEnabled: () => true,
@@ -94,6 +96,7 @@ function connection() {
     token: "secret",
     instanceId: "instance",
     appSessionId: "launch-1",
+    sourceAccessMode: "shared-filesystem",
   } as const;
 }
 

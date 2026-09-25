@@ -23,7 +23,7 @@ test("opening historical source requests its version and opens a separate native
 		{} as never,
 		{ onDidCloseEditor: Event.None } as never,
 		{} as never,
-		{ async getConnection() { return { serverUrl: "http://localhost", token: "test" }; } } as never,
+		{ async getConnection() { return { serverUrl: "http://localhost", token: "test", sourceAccessMode: "shared-filesystem" }; } } as never,
 		{ async openWindow(...args: unknown[]) { opened.push(args); } } as never,
 		{ warn() {} } as never,
 	);

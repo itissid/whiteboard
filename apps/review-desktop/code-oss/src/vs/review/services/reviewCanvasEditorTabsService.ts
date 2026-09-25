@@ -22,7 +22,7 @@ import {
 import { reviewSourceQuery, type ReviewSourceSelection } from "../common/reviewProtocol.js";
 import { REVIEW_LANGUAGE_SOURCE_SCHEME } from "../common/reviewReadonlySource.js";
 import { sourceLocation, sourceSelectionIdentity, REVIEW_API_SOURCE_SCHEME } from "../common/reviewSourceView.js";
-import { IReviewDesktopConnectionService, reviewResponseError } from "./reviewDesktopConnectionService.js";
+import { IReviewDesktopConnectionService, reviewResponseError, type ReviewServerConnection } from "./reviewDesktopConnectionService.js";
 
 export const IReviewCanvasEditorTabsService = createDecorator<IReviewCanvasEditorTabsService>(
 	"reviewCanvasEditorTabsService",
@@ -102,7 +102,9 @@ export class ReviewCanvasEditorTabsService extends Disposable implements IReview
 	}
 
 	async openApiSource(selection: ReviewSourceSelection, title: string): Promise<void> {
-		const result = await this.navigatorWorkspace(selection.reviewId, selection.kind === "version" ? { version: selection.version } : {});
+		const connection = await this.desktopConnection.getConnection();
+		this.requireSharedFilesystem(connection);
+		const result = await this.navigatorWorkspace(connection, selection.reviewId, selection.kind === "version" ? { version: selection.version } : {});
 		await this.host.openWindow([{ workspaceUri: URI.file(result.workspacePath), label: title }], { forceNewWindow: true });
 	}
 
@@ -111,7 +113,9 @@ export class ReviewCanvasEditorTabsService extends Disposable implements IReview
 		const diff = isResourceDiffEditorInput(editor);
 		const resources = diff ? [editor.original.resource, editor.modified.resource] : [isResourceEditorInput(editor) ? editor.resource : undefined];
 		if (!resources.every((resource): resource is URI => !!resource && [REVIEW_API_SOURCE_SCHEME, REVIEW_LANGUAGE_SOURCE_SCHEME].includes(resource.scheme))) return false;
-		const destinations = await Promise.all(resources.map(resource => this.sourceDestination(resource)));
+		const connection = await this.desktopConnection.getConnection();
+		if (connection.sourceAccessMode !== "shared-filesystem") return false;
+		const destinations = await Promise.all(resources.map(resource => this.sourceDestination(connection, resource)));
 		await this.host.openWindow([
 			{ workspaceUri: destinations[destinations.length - 1].workspaceUri },
 			...destinations.map(({ filePath }) => {
@@ -124,7 +128,9 @@ export class ReviewCanvasEditorTabsService extends Disposable implements IReview
 
 	async openSourceReferences(resource: URI, position: { readonly lineNumber: number; readonly column: number }): Promise<boolean> {
 		if (![REVIEW_API_SOURCE_SCHEME, REVIEW_LANGUAGE_SOURCE_SCHEME].includes(resource.scheme)) return false;
-		const destination = await this.sourceDestination(resource);
+		const connection = await this.desktopConnection.getConnection();
+		if (connection.sourceAccessMode !== "shared-filesystem") return false;
+		const destination = await this.sourceDestination(connection, resource);
 		await this.host.openWindow([{ workspaceUri: destination.workspaceUri }], {
 			forceNewWindow: true,
 			reviewReferencesToShow: { resource: URI.file(destination.filePath), lineNumber: position.lineNumber, column: position.column },
@@ -132,10 +138,10 @@ export class ReviewCanvasEditorTabsService extends Disposable implements IReview
 		return true;
 	}
 
-	private async sourceDestination(resource: URI): Promise<{ workspaceUri: URI; filePath: string }> {
+	private async sourceDestination(connection: ReviewServerConnection, resource: URI): Promise<{ workspaceUri: URI; filePath: string }> {
 		const target = sourceLocation(resource);
 		const local = resource.scheme === REVIEW_LANGUAGE_SOURCE_SCHEME;
-		const result = await this.navigatorWorkspace(target.view.reviewId, {
+		const result = await this.navigatorWorkspace(connection, target.view.reviewId, {
 			...reviewSourceQuery(target.view),
 			side: target.side,
 			file: local ? undefined : target.file,
@@ -146,8 +152,14 @@ export class ReviewCanvasEditorTabsService extends Disposable implements IReview
 		return { workspaceUri: URI.file(result.workspacePath), filePath };
 	}
 
-	private async navigatorWorkspace(reviewId: string, values: Record<string, string | number | undefined>): Promise<{ workspacePath: string; filePath?: string }> {
-		const { serverUrl, token } = await this.desktopConnection.getConnection();
+	private requireSharedFilesystem(connection: ReviewServerConnection): void {
+		if (connection.sourceAccessMode !== "shared-filesystem") {
+			throw new Error("Native Source Workspaces require Shared-filesystem Source Access Mode.");
+		}
+	}
+
+	private async navigatorWorkspace(connection: ReviewServerConnection, reviewId: string, values: Record<string, string | number | undefined>): Promise<{ workspacePath: string; filePath?: string }> {
+		const { serverUrl, token } = connection;
 		const query = new URLSearchParams(Object.entries(values).filter(([key, value]) => key !== "reviewId" && value !== undefined).map(([key, value]) => [key, String(value)]));
 		const response = await fetch(`${serverUrl}/reviews-api/${encodeURIComponent(reviewId)}/navigator${query.size ? `?${query}` : ""}`, {
 			method: "POST",
