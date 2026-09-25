@@ -182,6 +182,7 @@ export class ReviewDesktopConnectionService extends Disposable implements IRevie
 			name: input.name,
 			serverUrl: input.serverUrl,
 			sourceAccessMode: "api-only",
+			...(input.externalSourceOpener ? { externalSourceOpener: input.externalSourceOpener } : {}),
 		});
 		if (!profile) throw new Error("The Review Server Connection Profile is required.");
 		if (!input.token) throw new Error("Enter a Review Server Token.");

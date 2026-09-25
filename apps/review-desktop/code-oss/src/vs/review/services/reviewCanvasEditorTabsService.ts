@@ -19,10 +19,11 @@ import {
 	type ReviewCanvasEditorTarget,
 } from "../browser/parts/canvas/reviewCanvasEditorInput.js";
 
-import { reviewSourceQuery, type ReviewSourceSelection } from "../common/reviewProtocol.js";
+import type { ReviewSourceSelection } from "../common/reviewProtocol.js";
 import { REVIEW_LANGUAGE_SOURCE_SCHEME } from "../common/reviewReadonlySource.js";
-import { sourceLocation, sourceSelectionIdentity, REVIEW_API_SOURCE_SCHEME } from "../common/reviewSourceView.js";
-import { IReviewDesktopConnectionService, reviewResponseError, type ReviewServerConnection } from "./reviewDesktopConnectionService.js";
+import { sourceSelectionIdentity, REVIEW_API_SOURCE_SCHEME } from "../common/reviewSourceView.js";
+import { IReviewDesktopConnectionService, type ReviewServerConnection } from "./reviewDesktopConnectionService.js";
+import { resolveReviewSourceDestination, resolveReviewSourceWorkspace } from "./reviewSourceNavigator.js";
 
 export const IReviewCanvasEditorTabsService = createDecorator<IReviewCanvasEditorTabsService>(
 	"reviewCanvasEditorTabsService",
@@ -104,7 +105,7 @@ export class ReviewCanvasEditorTabsService extends Disposable implements IReview
 	async openApiSource(selection: ReviewSourceSelection, title: string): Promise<void> {
 		const connection = await this.desktopConnection.getConnection();
 		this.requireSharedFilesystem(connection);
-		const result = await this.navigatorWorkspace(connection, selection.reviewId, selection.kind === "version" ? { version: selection.version } : {});
+		const result = await resolveReviewSourceWorkspace(connection, selection);
 		await this.host.openWindow([{ workspaceUri: URI.file(result.workspacePath), label: title }], { forceNewWindow: true });
 	}
 
@@ -115,9 +116,9 @@ export class ReviewCanvasEditorTabsService extends Disposable implements IReview
 		if (!resources.every((resource): resource is URI => !!resource && [REVIEW_API_SOURCE_SCHEME, REVIEW_LANGUAGE_SOURCE_SCHEME].includes(resource.scheme))) return false;
 		const connection = await this.desktopConnection.getConnection();
 		if (connection.sourceAccessMode !== "shared-filesystem") return false;
-		const destinations = await Promise.all(resources.map(resource => this.sourceDestination(connection, resource)));
+		const destinations = await Promise.all(resources.map(resource => resolveReviewSourceDestination(connection, resource)));
 		await this.host.openWindow([
-			{ workspaceUri: destinations[destinations.length - 1].workspaceUri },
+			{ workspaceUri: URI.file(destinations[destinations.length - 1].workspacePath) },
 			...destinations.map(({ filePath }) => {
 				const selection = !diff ? (editor.options as ITextEditorOptions | undefined)?.selection : undefined;
 				return { fileUri: URI.file(selection ? `${filePath}:${selection.startLineNumber}:${selection.startColumn ?? 1}` : filePath) };
@@ -130,44 +131,18 @@ export class ReviewCanvasEditorTabsService extends Disposable implements IReview
 		if (![REVIEW_API_SOURCE_SCHEME, REVIEW_LANGUAGE_SOURCE_SCHEME].includes(resource.scheme)) return false;
 		const connection = await this.desktopConnection.getConnection();
 		if (connection.sourceAccessMode !== "shared-filesystem") return false;
-		const destination = await this.sourceDestination(connection, resource);
-		await this.host.openWindow([{ workspaceUri: destination.workspaceUri }], {
+		const destination = await resolveReviewSourceDestination(connection, resource);
+		await this.host.openWindow([{ workspaceUri: URI.file(destination.workspacePath) }], {
 			forceNewWindow: true,
 			reviewReferencesToShow: { resource: URI.file(destination.filePath), lineNumber: position.lineNumber, column: position.column },
 		});
 		return true;
 	}
 
-	private async sourceDestination(connection: ReviewServerConnection, resource: URI): Promise<{ workspaceUri: URI; filePath: string }> {
-		const target = sourceLocation(resource);
-		const local = resource.scheme === REVIEW_LANGUAGE_SOURCE_SCHEME;
-		const result = await this.navigatorWorkspace(connection, target.view.reviewId, {
-			...reviewSourceQuery(target.view),
-			side: target.side,
-			file: local ? undefined : target.file,
-			empty: new URLSearchParams(resource.query).has("empty") ? "true" : undefined,
-		});
-		const filePath = local ? resource.fsPath : result.filePath;
-		if (!filePath) throw new Error("The navigator did not resolve the source file.");
-		return { workspaceUri: URI.file(result.workspacePath), filePath };
-	}
-
 	private requireSharedFilesystem(connection: ReviewServerConnection): void {
 		if (connection.sourceAccessMode !== "shared-filesystem") {
 			throw new Error("Native Source Workspaces require Shared-filesystem Source Access Mode.");
 		}
-	}
-
-	private async navigatorWorkspace(connection: ReviewServerConnection, reviewId: string, values: Record<string, string | number | undefined>): Promise<{ workspacePath: string; filePath?: string }> {
-		const { serverUrl, token } = connection;
-		const query = new URLSearchParams(Object.entries(values).filter(([key, value]) => key !== "reviewId" && value !== undefined).map(([key, value]) => [key, String(value)]));
-		const response = await fetch(`${serverUrl}/reviews-api/${encodeURIComponent(reviewId)}/navigator${query.size ? `?${query}` : ""}`, {
-			method: "POST",
-			headers: { "x-review-token": token },
-			signal: AbortSignal.timeout(60_000),
-		});
-		if (!response.ok) throw await reviewResponseError(response, "Could not open the code navigator.");
-		return response.json();
 	}
 
 	openSettings(active: boolean): Promise<ReviewCanvasEditorInput> {

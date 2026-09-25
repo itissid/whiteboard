@@ -254,6 +254,10 @@ test("creates an API-only loopback profile with metadata and token in separate s
 		name: "Forwarded devbox",
 		serverUrl: "http://127.0.0.1:5500/",
 		token: "saved-token",
+		externalSourceOpener: {
+			executable: "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code",
+			authority: "development-host",
+		},
 	});
 
 	const metadata = settings.get(REVIEW_SERVER_PROFILE_SETTING) as Record<string, unknown>;
@@ -262,9 +266,15 @@ test("creates an API-only loopback profile with metadata and token in separate s
 		name: "Forwarded devbox",
 		serverUrl: "http://127.0.0.1:5500",
 		sourceAccessMode: "api-only",
+		externalSourceOpener: {
+			executable: "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code",
+			authority: "development-host",
+		},
 	});
 	assert.equal(typeof metadata.id, "string");
 	assert.equal(JSON.stringify(metadata).includes("saved-token"), false);
+	assert.equal(JSON.stringify(metadata).includes("sshPassword"), false);
+	assert.equal(JSON.stringify(metadata).includes("privateKey"), false);
 	assert.deepEqual([...secrets.values()], ["saved-token"]);
 	assert.deepEqual(requests, [
 		"http://127.0.0.1:5500/health",

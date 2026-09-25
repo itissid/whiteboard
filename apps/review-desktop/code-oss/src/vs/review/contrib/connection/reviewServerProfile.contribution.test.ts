@@ -9,7 +9,13 @@ import test from "node:test";
 import { createRemoteProfileFromPrompts } from "./reviewServerProfile.contribution.js";
 
 test("the connection command collects a named API-only profile and reloads after activation", async () => {
-  const answers = ["Forwarded devbox", "http://127.0.0.1:5500", "saved-token"];
+  const answers = [
+    "Forwarded devbox",
+    "http://127.0.0.1:5500",
+    "saved-token",
+    "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code",
+    "development-host",
+  ];
   const prompts: Array<Record<string, unknown>> = [];
   let activated: unknown;
   let reloads = 0;
@@ -33,10 +39,30 @@ test("the connection command collects a named API-only profile and reloads after
     name: "Forwarded devbox",
     serverUrl: "http://127.0.0.1:5500",
     token: "saved-token",
+    externalSourceOpener: {
+      executable: "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code",
+      authority: "development-host",
+    },
   });
-  assert.equal(prompts.length, 3);
+  assert.equal(prompts.length, 5);
   assert.equal(prompts[2]?.password, true);
   assert.equal(reloads, 1);
+});
+
+test("the connection command can leave the optional external source opener unconfigured", async () => {
+  const answers = ["Review only", "http://127.0.0.1:5500", "saved-token", ""];
+  let activated: unknown;
+  await createRemoteProfileFromPrompts(
+    { input: () => Promise.resolve(answers.shift()) } as never,
+    { createAndActivateRemoteProfile: (input: unknown) => { activated = input; return Promise.resolve(); } } as never,
+    { reload: () => Promise.resolve() } as never,
+  );
+
+  assert.deepEqual(activated, {
+    name: "Review only",
+    serverUrl: "http://127.0.0.1:5500",
+    token: "saved-token",
+  });
 });
 
 test("cancelling a connection prompt preserves the current connection", async () => {

@@ -4,6 +4,10 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { ReviewSourceAccessMode } from "./reviewDesktopBootstrap.js";
+import {
+  parseReviewExternalSourceOpenerConfiguration,
+  type ReviewExternalSourceOpenerConfiguration,
+} from "./reviewExternalSourceOpener.js";
 
 export const REVIEW_SERVER_PROFILE_SETTING = "review.serverConnectionProfile";
 const REVIEW_SERVER_PROFILE_TOKEN_PREFIX = "review.serverConnectionProfile.token.";
@@ -12,6 +16,7 @@ export interface CreateRemoteReviewServerProfileInput {
   readonly name: string;
   readonly serverUrl: string;
   readonly token: string;
+  readonly externalSourceOpener?: ReviewExternalSourceOpenerConfiguration;
 }
 
 export interface ReviewServerConnectionProfile {
@@ -19,6 +24,7 @@ export interface ReviewServerConnectionProfile {
   readonly name: string;
   readonly serverUrl: string;
   readonly sourceAccessMode: Extract<ReviewSourceAccessMode, "api-only">;
+  readonly externalSourceOpener?: ReviewExternalSourceOpenerConfiguration;
 }
 
 export function reviewServerProfileTokenKey(profileId: string): string {
@@ -60,5 +66,8 @@ export function parseReviewServerProfile(value: unknown): ReviewServerConnection
     name: profile.name.trim(),
     serverUrl: normalizeReviewServerUrl(profile.serverUrl),
     sourceAccessMode: "api-only",
+    ...(profile.externalSourceOpener === undefined
+      ? {}
+      : { externalSourceOpener: parseReviewExternalSourceOpenerConfiguration(profile.externalSourceOpener) }),
   };
 }
