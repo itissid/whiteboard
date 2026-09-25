@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { REVIEW_DESKTOP_CONNECTION_VERSION } from "../common/reviewDesktopBootstrap.js";
+import { REVIEW_SERVER_PROFILE_SETTING, reviewServerProfileTokenKey } from "../common/reviewServerProfile.js";
 import { ReviewDesktopConnectionService } from "./reviewDesktopConnectionService.js";
 
 const uuid = "11111111-1111-4111-8111-111111111111";
@@ -26,8 +27,16 @@ class TestStorage {
 	}
 }
 
+const noProfileConfiguration = { getValue: () => undefined };
+const noSecrets = { get: () => Promise.resolve(undefined) };
+
 function serviceWith(storage = new TestStorage()): ReviewDesktopConnectionService {
-	const service = new ReviewDesktopConnectionService({} as never, storage as never);
+	const service = new ReviewDesktopConnectionService(
+		{} as never,
+		storage as never,
+		noProfileConfiguration as never,
+		noSecrets as never,
+	);
 	Object.assign(service, {
 		connection: {
 			version: 1,
@@ -66,7 +75,12 @@ test("exposes the main process Source Access Mode without inferring it from a lo
 		assert.equal(String(input), `${desktopConnection.url}/health`);
 		return Response.json({ instanceId: desktopConnection.instanceId });
 	});
-	const service = new ReviewDesktopConnectionService(mainProcessService as never, new TestStorage() as never);
+	const service = new ReviewDesktopConnectionService(
+		mainProcessService as never,
+		new TestStorage() as never,
+		noProfileConfiguration as never,
+		noSecrets as never,
+	);
 	t.after(() => service.dispose());
 
 	assert.deepEqual(await service.getConnection(), {
@@ -184,4 +198,143 @@ test("passes automatic command updates to the server without enabling optional i
 	});
 	await service.applyCliInstall({ shim: false, autoUpdate: true });
 	assert.deepEqual(requestBody, { shim: false, autoUpdate: true });
+});
+
+test("creates an API-only loopback profile with metadata and token in separate stores", async (t) => {
+	const settings = new Map<string, unknown>();
+	const secrets = new Map<string, string>();
+	const calls: Array<{ command: string; arg: unknown }> = [];
+	const mainProcessService = {
+		getChannel() {
+			return {
+				call(command: string, arg: unknown) {
+					calls.push({ command, arg });
+					if (command === "getAppSessionId") return Promise.resolve("remote-app-session");
+					return Promise.resolve(undefined);
+				},
+			};
+		},
+	};
+	const configurationService = {
+		getValue(key: string) { return settings.get(key); },
+		updateValue(key: string, value: unknown) {
+			settings.set(key, value);
+			return Promise.resolve();
+		},
+	};
+	const secretStorageService = {
+		get(key: string) { return Promise.resolve(secrets.get(key)); },
+		set(key: string, value: string) {
+			secrets.set(key, value);
+			return Promise.resolve();
+		},
+		delete(key: string) {
+			secrets.delete(key);
+			return Promise.resolve();
+		},
+	};
+	const service = new ReviewDesktopConnectionService(
+		mainProcessService as never,
+		new TestStorage() as never,
+		configurationService as never,
+		secretStorageService as never,
+	);
+	t.after(() => service.dispose());
+	const requests: string[] = [];
+	mockFetch(t, async (input, init) => {
+		requests.push(String(input));
+		assert.equal(new Headers(init?.headers).get("x-review-token"), "saved-token");
+		if (String(input).endsWith("/health")) {
+			return Response.json({ ok: true, instanceId: "remote-instance" });
+		}
+		return Response.json({ desktopAvailable: false, softwareMapEnabled: false, scratchpadEnabled: false });
+	});
+
+	await service.createAndActivateRemoteProfile({
+		name: "Forwarded devbox",
+		serverUrl: "http://127.0.0.1:5500/",
+		token: "saved-token",
+	});
+
+	const metadata = settings.get(REVIEW_SERVER_PROFILE_SETTING) as Record<string, unknown>;
+	assert.deepEqual(metadata, {
+		id: metadata.id,
+		name: "Forwarded devbox",
+		serverUrl: "http://127.0.0.1:5500",
+		sourceAccessMode: "api-only",
+	});
+	assert.equal(typeof metadata.id, "string");
+	assert.equal(JSON.stringify(metadata).includes("saved-token"), false);
+	assert.deepEqual([...secrets.values()], ["saved-token"]);
+	assert.deepEqual(requests, [
+		"http://127.0.0.1:5500/health",
+		"http://127.0.0.1:5500/reviews-api/capabilities",
+	]);
+	assert.deepEqual(calls.map(({ command }) => command), ["getAppSessionId", "activateRemoteProfile"]);
+	assert.deepEqual(await service.getConnection(), {
+		serverUrl: "http://127.0.0.1:5500",
+		token: "saved-token",
+		appSessionId: "remote-app-session",
+		sourceAccessMode: "api-only",
+	});
+});
+
+test("invalid, unreachable, and incompatible remote profiles never fall back to embedded data", async (t) => {
+	const profile = {
+		id: "remote-profile",
+		name: "Remote server",
+		serverUrl: "http://127.0.0.1:5500",
+		sourceAccessMode: "api-only",
+	} as const;
+	const scenarios: Array<{
+		name: string;
+		fetch: typeof fetch;
+		error: RegExp;
+	}> = [
+		{
+			name: "invalid token",
+			fetch: async () => Response.json({ error: "Unauthorized" }, { status: 401 }),
+			error: /rejected the token/,
+		},
+		{
+			name: "unreachable endpoint",
+			fetch: async () => { throw new TypeError("connect refused"); },
+			error: /is unreachable/,
+		},
+		{
+			name: "incompatible server",
+			fetch: async (input) => String(input).endsWith("/health")
+				? Response.json({ ok: true, instanceId: "remote-instance" })
+				: Response.json({ unexpected: true }),
+			error: /not compatible/,
+		},
+	];
+	for (const scenario of scenarios) {
+		await t.test(scenario.name, async (t) => {
+			let embeddedRequests = 0;
+			let remoteActivations = 0;
+			mockFetch(t, scenario.fetch);
+			const service = new ReviewDesktopConnectionService(
+				{
+					getChannel() {
+						return {
+							call(command: string) {
+								if (command === "getAppSessionId") return Promise.resolve("app-session");
+								if (command === "activateRemoteProfile") remoteActivations += 1;
+								else embeddedRequests += 1;
+								return Promise.resolve(undefined);
+							},
+						};
+					},
+				} as never,
+				new TestStorage() as never,
+				{ getValue: () => profile } as never,
+				{ get: (key: string) => Promise.resolve(key === reviewServerProfileTokenKey(profile.id) ? "bad-token" : undefined) } as never,
+			);
+			t.after(() => service.dispose());
+			await assert.rejects(service.getConnection(), scenario.error);
+			assert.equal(embeddedRequests, 0);
+			assert.equal(remoteActivations, 0);
+		});
+	}
 });

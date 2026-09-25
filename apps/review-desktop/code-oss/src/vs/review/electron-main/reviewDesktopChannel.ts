@@ -24,8 +24,15 @@ export class ReviewDesktopChannel implements IServerChannel {
 
   async call<T>(_context: string, command: string): Promise<T> {
     if (command === "getConnection") {
-      const connection: ReviewDesktopConnection = await this.host.whenConnected();
+      const connection: ReviewDesktopConnection = await this.host.requestEmbeddedConnection();
       return connection as T;
+    }
+    if (command === "getAppSessionId") {
+      return this.host.appSessionId as T;
+    }
+    if (command === "activateRemoteProfile") {
+      await this.host.activateRemoteProfile();
+      return undefined as T;
     }
     if (command === "stageRustAnalyzer") {
       this.host.stageRustAnalyzer();

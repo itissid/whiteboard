@@ -36,6 +36,8 @@ import {
 export class ReviewDesktopHost extends Disposable {
   private readonly supervisor: ReviewServerSupervisor;
   private terminating = false;
+  private embeddedConnectionRequested = false;
+  private remoteProfileActive = false;
 
   private readonly onTerminationSignal = () => {
     if (this.terminating) return;
@@ -123,7 +125,7 @@ export class ReviewDesktopHost extends Disposable {
     // Main-process errors report through the embedded server, so they pass the
     // same opt-out checks and the same redaction step as every other event.
     errorTelemetry = new ReviewMainErrorTelemetry({
-      whenConnected: () => this.whenConnected(),
+      whenConnected: () => this.supervisor.whenConnected(),
       isTelemetryEnabled: () =>
         this.configurationService.getValue<boolean>(REVIEW_TELEMETRY_SETTING) !==
         false,
@@ -140,7 +142,7 @@ export class ReviewDesktopHost extends Disposable {
         appVersion:
           this.productService.reviewVersion ?? this.productService.version,
       },
-      whenConnected: () => this.whenConnected(),
+      whenConnected: () => this.supervisor.whenConnected(),
       isTelemetryEnabled: () =>
         this.configurationService.getValue<boolean>(REVIEW_TELEMETRY_SETTING) !==
         false,
@@ -178,15 +180,28 @@ export class ReviewDesktopHost extends Disposable {
     );
     process.once("SIGINT", this.onTerminationSignal);
     process.once("SIGTERM", this.onTerminationSignal);
-    this.supervisor.start();
   }
 
-  /**
-   * Resolves once the embedded server has announced a validated endpoint. The
-   * renderer awaits this instead of reading bootstrap environment variables.
-   */
-  whenConnected(): Promise<ReviewDesktopConnection> {
+  get appSessionId(): string {
+    return this.supervisor.appSessionId;
+  }
+
+  /** Starts the default embedded server only after the renderer selected it. */
+  requestEmbeddedConnection(): Promise<ReviewDesktopConnection> {
+    if (this.remoteProfileActive) {
+      return Promise.reject(new Error("The active Review Server Connection Profile is remote."));
+    }
+    if (!this.embeddedConnectionRequested) {
+      this.embeddedConnectionRequested = true;
+      this.supervisor.start();
+    }
     return this.supervisor.whenConnected();
+  }
+
+  /** Makes remote selection authoritative and stops any earlier embedded owner. */
+  async activateRemoteProfile(): Promise<void> {
+    this.remoteProfileActive = true;
+    await this.supervisor.stop();
   }
 
   stageRustAnalyzer(): void {
