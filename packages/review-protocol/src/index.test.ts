@@ -42,7 +42,9 @@ describe("review protocol parsers", () => {
         args: {
           path: "src/cli.ts",
           startLine: 10,
+          startColumn: 4,
           endLine: 12,
+          endColumn: 9,
           side: "base",
           highlight: true,
           preserveFocus: true,
@@ -53,7 +55,9 @@ describe("review protocol parsers", () => {
       args: {
         path: "src/cli.ts",
         startLine: 10,
+        startColumn: 4,
         endLine: 12,
+        endColumn: 9,
         side: "base",
         highlight: true,
         preserveFocus: true,

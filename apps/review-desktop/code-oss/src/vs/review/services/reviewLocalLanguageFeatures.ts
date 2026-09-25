@@ -90,7 +90,8 @@ export class ReviewLocalLanguageFeatures extends Disposable {
 	}
 
 	private async environment(model: ITextModel, validate = false): Promise<ReviewLanguageEnvironment | undefined> {
-		const { serverUrl, token } = await this.connection.getConnection();
+		const { serverUrl, token, sourceAccessMode } = await this.connection.getConnection();
+		if (sourceAccessMode !== "shared-filesystem") return undefined;
 		const target = sourceLocation(model.uri);
 		return this.environments.read(JSON.stringify([serverUrl, token]), target.view, target.side, async () => {
 			const params = new URLSearchParams({ side: target.side });

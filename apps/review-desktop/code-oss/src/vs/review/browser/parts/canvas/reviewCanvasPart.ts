@@ -426,7 +426,12 @@ export class ReviewCanvasEditorPane extends EditorPane {
 									return { ok: true };
 								}
 								if (request.name === "reveal") {
-									const range = { startLine: request.args.startLine, endLine: request.args.endLine };
+									const range = {
+										startLine: request.args.startLine,
+										startColumn: request.args.startColumn,
+										endLine: request.args.endLine,
+										endColumn: request.args.endColumn,
+									};
 									await this.apiSource.open(
 										{ view: reviewSourceAnchor(sourceView, request.args.pins), file: request.args.path, side: request.args.side ?? "head" },
 										range,

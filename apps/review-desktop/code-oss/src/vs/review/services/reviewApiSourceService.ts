@@ -29,7 +29,7 @@ import { resolveReviewSourceView, reviewSourceAnchor, reviewSourceComparison, re
 import { REVIEW_LANGUAGE_SOURCE_SCHEME } from "../common/reviewReadonlySource.js";
 import { apiSourceUri, sourceLocation, sourceTreeUri, sourceTreeSelection, REVIEW_API_TREE_SCHEME, REVIEW_API_SOURCE_SCHEME } from "../common/reviewSourceView.js";
 import { IReviewCanvasEditorTabsService } from "./reviewCanvasEditorTabsService.js";
-import { IReviewDesktopConnectionService, reviewResponseError } from "./reviewDesktopConnectionService.js";
+import { IReviewDesktopConnectionService, reviewResponseError, type ReviewServerConnection } from "./reviewDesktopConnectionService.js";
 import type { ReviewDiffViewService, ReviewDiffViewSource } from "./reviewDiffViewService.js";
 import type { ReviewEmbeddedEditors } from "./reviewEmbeddedEditors.js";
 
@@ -109,9 +109,10 @@ export class ReviewApiSourceService extends Disposable implements IReviewApiSour
 					if (existing) return existing;
 					const query = new URLSearchParams(resource.query);
 					const target = sourceLocation(resource);
-					const body = query.has("empty")
-						? { text: "" }
-						: await this.read<{ text: string; localPath?: string }>(target.view.reviewId, "/file", { ...reviewSourceQuery(target.view), side: target.side, file: target.file });
+					const connection = query.has("empty") ? undefined : await this.session.getConnection();
+					const body = connection
+						? await this.readAtConnection<{ text: string; localPath?: string }>(connection, target.view.reviewId, "/file", { ...reviewSourceQuery(target.view), side: target.side, file: target.file })
+						: { text: "" };
 					const model = (
 						modelService.getModel(resource) ??
 						modelService.createModel(
@@ -120,8 +121,8 @@ export class ReviewApiSourceService extends Disposable implements IReviewApiSour
 							resource,
 						)
 					);
-					if (body.localPath) {
-						this.followDisk(model, URI.file(body.localPath), async () => (await this.read<{ text: string }>(target.view.reviewId, "/file", { ...reviewSourceQuery(target.view), side: target.side, file: target.file })).text);
+					if (body.localPath && connection?.sourceAccessMode === "shared-filesystem") {
+						this.followDisk(model, URI.file(body.localPath), async () => (await this.readAtConnection<{ text: string }>(connection, target.view.reviewId, "/file", { ...reviewSourceQuery(target.view), side: target.side, file: target.file })).text);
 					}
 					return model;
 				},
@@ -159,7 +160,15 @@ export class ReviewApiSourceService extends Disposable implements IReviewApiSour
 		route: string,
 		query: Record<string, string | number | undefined>,
 	): Promise<T> {
-		const { serverUrl, token } = await this.session.getConnection();
+		return this.readAtConnection(await this.session.getConnection(), reviewId, route, query);
+	}
+
+	private async readAtConnection<T>(
+		{ serverUrl, token }: ReviewServerConnection,
+		reviewId: string,
+		route: string,
+		query: Record<string, string | number | undefined>,
+	): Promise<T> {
 		const params = new URLSearchParams(
 			Object.entries(query)
 				.filter(([key, value]) => key !== "reviewId" && value !== undefined)
@@ -186,9 +195,9 @@ export class ReviewApiSourceService extends Disposable implements IReviewApiSour
 					? {
 						selection: {
 							startLineNumber: range.startLine,
-							startColumn: 1,
+							startColumn: range.startColumn ?? 1,
 							endLineNumber: range.endLine,
-							endColumn: Number.MAX_SAFE_INTEGER,
+							endColumn: range.endColumn ?? Number.MAX_SAFE_INTEGER,
 						},
 					}
 					: {}),

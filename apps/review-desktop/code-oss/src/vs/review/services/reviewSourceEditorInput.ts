@@ -6,6 +6,7 @@ export class ReviewSourceEditorInput extends TextResourceEditorInput {
 	override get capabilities(): EditorInputCapabilities {
 		return EditorInputCapabilities.Readonly | EditorInputCapabilities.CanSplitInGroup;
 	}
+	override isReadonly(): boolean { return true; }
 	override async save(): Promise<undefined> { return undefined; }
 	override async saveAs(): Promise<undefined> { return undefined; }
 	override async revert(): Promise<void> { }
