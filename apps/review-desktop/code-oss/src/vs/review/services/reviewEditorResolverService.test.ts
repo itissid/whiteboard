@@ -103,10 +103,6 @@ test("API-only source requests stay out of Native Source Workspaces", async (t) 
 	assert.equal(await resolver.resolveEditor(input, undefined), ResolvedStatus.NONE);
 	assert.equal(stock.mock.calls[0].arguments[0], input);
 	assert.equal(await tabs.openSourceReferences(source, { lineNumber: 4, column: 2 }), false);
-	await assert.rejects(
-		tabs.openApiSource({ reviewId: "review-a", kind: "version", version: 7 }, "Remote Review"),
-		/Shared-filesystem Source Access Mode/,
-	);
 	assert.equal(requests, 0);
 	assert.equal(windows, 0);
 });

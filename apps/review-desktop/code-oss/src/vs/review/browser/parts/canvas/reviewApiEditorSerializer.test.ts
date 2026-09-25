@@ -37,6 +37,57 @@ test("opening historical source requests its version and opens a separate native
 	assert.equal(opened.length, 1);
 });
 
+test("API-only source trees open pinned canvas tabs without a native workspace", async (t) => {
+	const inputs: ReviewCanvasEditorInput[] = [];
+	const opened: Array<{ input: ReviewCanvasEditorInput; options: unknown }> = [];
+	let navigatorRequests = 0;
+	let nativeWindows = 0;
+	t.mock.method(globalThis, "fetch", async () => {
+		navigatorRequests += 1;
+		return Response.json({ workspacePath: "/remote/review.code-workspace" });
+	});
+	const tabs = new ReviewCanvasEditorTabsService(
+		{
+			createInstance(_ctor: unknown, target: ConstructorParameters<typeof ReviewCanvasEditorInput>[0]) {
+				const input = new ReviewCanvasEditorInput(target, {} as never);
+				inputs.push(input);
+				return input;
+			},
+		} as never,
+		{
+			onDidCloseEditor: Event.None,
+			async openEditor(input: ReviewCanvasEditorInput, options: unknown) {
+				opened.push({ input, options });
+			},
+		} as never,
+		{ groups: [], mainPart: { activeGroup: {} } } as never,
+		{ async getConnection() { return { serverUrl: "http://localhost", token: "test", sourceAccessMode: "api-only" }; } } as never,
+		{ async openWindow() { nativeWindows += 1; } } as never,
+		{ warn() {} } as never,
+	);
+	t.after(() => {
+		tabs.dispose();
+		inputs.forEach((input) => input.dispose());
+	});
+
+	await tabs.openApiSource({ reviewId: "review-a", kind: "version", version: 7 }, "Remote Review");
+
+	assert.equal(opened.length, 1);
+	assert.deepEqual(opened[0]!.input.target, {
+		kind: "api-source",
+		reviewId: "review-a",
+		selection: { reviewId: "review-a", kind: "version", version: 7 },
+		title: "Remote Review",
+	});
+	assert.equal(opened[0]!.input.getName(), "Source — Remote Review (v7)");
+	assert.deepEqual(opened[0]!.options, { pinned: true, inactive: false, revealIfVisible: true });
+	await tabs.openApiSource({ reviewId: "review-a", kind: "version", version: 7 }, "Renamed Review");
+	assert.equal(opened[1]!.input, opened[0]!.input);
+	assert.equal(opened[1]!.input.getName(), "Source — Renamed Review (v7)");
+	assert.equal(navigatorRequests, 0);
+	assert.equal(nativeWindows, 0);
+});
+
 test("native group restoration preserves both reviews, order and pinned source versions without duplicate tabs", async (t) => {
 	const inputs: ReviewCanvasEditorInput[] = [];
 	let tabs: ReviewCanvasEditorTabsService;

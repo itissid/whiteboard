@@ -60,7 +60,7 @@ export class ReviewCanvasEditorInput extends EditorInput {
 	}
 
 	setApiTitle(title: string): void {
-		if (this._target.kind !== "api" || this._target.title === title) return;
+		if ((this._target.kind !== "api" && this._target.kind !== "api-source") || this._target.title === title) return;
 		this._target = { ...this._target, title };
 		this._onDidChangeLabel.fire();
 	}

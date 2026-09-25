@@ -16,7 +16,8 @@ import { URI } from "../../base/common/uri.js";
 import type { ITextModelContentProvider } from "../../editor/common/services/resolverService.js";
 import type { IOpenWindowOptions, IWindowOpenable } from "../../platform/window/common/window.js";
 import { REVIEW_SERVER_PROFILE_SETTING, reviewServerProfileTokenKey } from "../common/reviewServerProfile.js";
-import { apiSourceUri } from "../common/reviewSourceView.js";
+import { apiSourceUri, sourceLocation, sourceTreeUri } from "../common/reviewSourceView.js";
+import { ReviewCanvasEditorInput } from "../browser/parts/canvas/reviewCanvasEditorInput.js";
 import { ReviewApiClient } from "../common/reviewProtocol.js";
 import { ReviewApiCatalogService } from "./reviewApiCatalogService.js";
 import { ReviewApiSourceService } from "./reviewApiSourceService.js";
@@ -37,11 +38,19 @@ async function createRepository(root: string) {
 	git("config", "user.name", "Whiteboard Test");
 	git("config", "user.email", "whiteboard-test@example.invalid");
 	await writeFile(path.join(directory, "example.ts"), "export const value = 1;\n");
+	await writeFile(path.join(directory, "old-name.ts"), "export const renamed = true;\n");
+	await writeFile(path.join(directory, "deleted.ts"), "export const removed = true;\n");
 	git("add", ".");
 	git("commit", "-qm", "base");
 	const base = git("rev-parse", "HEAD");
+	await mkdir(path.join(directory, "nested"));
 	await writeFile(path.join(directory, "example.ts"), "export const value = 2;\n");
-	git("commit", "-qam", "head");
+	await writeFile(path.join(directory, "added.md"), "# Added\n");
+	await writeFile(path.join(directory, "nested", "neighbor.ts"), "export const neighbor = 3;\n");
+	git("mv", "old-name.ts", "renamed.ts");
+	git("rm", "-q", "deleted.ts");
+	git("add", ".");
+	git("commit", "-qm", "head");
 	return { directory, base, head: git("rev-parse", "HEAD") };
 }
 
@@ -193,7 +202,7 @@ test("real headless source references use API editors or Native Source Workspace
 		operation: {
 			type: "create",
 			title: "Source route integration",
-			target: { kind: "worktree", repositoryId: registered.id, base: repository.base },
+			pins: { repositoryId: registered.id, base: repository.base, head: repository.head },
 		},
 	});
 	const target = {
@@ -209,21 +218,40 @@ test("real headless source references use API editors or Native Source Workspace
 		return realFetch(input, init);
 	});
 	const apiWindows: Array<{ openables: IWindowOpenable[]; options: IOpenWindowOptions }> = [];
+	const canvasInputs: ReviewCanvasEditorInput[] = [];
+	const sourceTabs: ReviewCanvasEditorInput[] = [];
 	const apiTabs = new ReviewCanvasEditorTabsService(
-		{} as never,
-		{ onDidCloseEditor: Event.None } as never,
-		{} as never,
+		{
+			createInstance(_ctor: unknown, canvasTarget: ConstructorParameters<typeof ReviewCanvasEditorInput>[0]) {
+				const input = new ReviewCanvasEditorInput(canvasTarget, {} as never);
+				canvasInputs.push(input);
+				return input;
+			},
+		} as never,
+		{
+			onDidCloseEditor: Event.None,
+			async openEditor(input: ReviewCanvasEditorInput) { sourceTabs.push(input); },
+		} as never,
+		{ groups: [], mainPart: { activeGroup: {} } } as never,
 		{ getConnection: async () => connection } as never,
 		{ openWindow: async (openables: IWindowOpenable[], options: IOpenWindowOptions) => { apiWindows.push({ openables, options }); } } as never,
 		{ warn() {} } as never,
 	);
-	t.after(() => apiTabs.dispose());
+	t.after(() => {
+		apiTabs.dispose();
+		canvasInputs.forEach(input => input.dispose());
+	});
+	const sourceSelection = { reviewId: created.reviewId, kind: "version" as const, version: 0 };
+	await apiTabs.openApiSource(sourceSelection, "Source route integration");
+	assert.equal(sourceTabs[0]!.getName(), "Source — Source route integration (v0)");
+	assert.deepEqual(sourceTabs[0]!.target, { kind: "api-source", reviewId: created.reviewId, selection: sourceSelection, title: "Source route integration" });
 	assert.equal(await apiTabs.openSourceEditor({ resource }), false);
 	assert.equal(apiWindows.length, 0);
 	assert.equal(requests.some(request => request.pathname.endsWith("/navigator")), false);
 
 	let provider: ITextModelContentProvider | undefined;
-	const opened: Array<{ resource: URI; options?: { selection?: unknown } }> = [];
+	const openedSources: Array<{ resource: URI; options?: { selection?: unknown } }> = [];
+	const openedDiffs: Array<{ original: { resource: URI }; modified: { resource: URI } }> = [];
 	const models = new Map<string, { uri: URI; text: string; languageId: string; getLineCount(): number }>();
 	const apiSources = new ReviewApiSourceService(
 		{ getConnection: async () => connection } as never,
@@ -241,16 +269,22 @@ test("real headless source references use API editors or Native Source Workspace
 				return model;
 			},
 		} as never,
-		{ createByFilepathOrFirstLine: (uri: URI) => ({ languageId: uri.path.endsWith(".ts") ? "typescript" : "plaintext" }) } as never,
-		{ openEditor: async (input: { resource: URI; options?: { selection?: unknown } }) => { opened.push(input); return { input: { resource: input.resource } }; } } as never,
+		{ createByFilepathOrFirstLine: (uri: URI) => ({ languageId: uri.path.endsWith(".ts") ? "typescript" : uri.path.endsWith(".md") ? "markdown" : "plaintext" }) } as never,
+		{
+			openEditor: async (input: { resource: URI; options?: { selection?: unknown } } | { original: { resource: URI }; modified: { resource: URI } }) => {
+				if ("resource" in input) openedSources.push(input);
+				else openedDiffs.push(input);
+				return { input: { resource: "resource" in input ? input.resource : input.modified.resource } };
+			},
+		} as never,
 		apiTabs,
 		{ watch() { throw new Error("API-only source attempted to watch a server path"); }, onDidFilesChange: Event.None } as never,
 	);
 	t.after(() => apiSources.dispose());
 	await apiSources.open(target, { startLine: 1, startColumn: 8, endLine: 1, endColumn: 13 });
-	assert.equal(opened[0]!.resource.toString(), resource.toString());
-	assert.deepEqual(opened[0]!.options?.selection, { startLineNumber: 1, startColumn: 8, endLineNumber: 1, endColumn: 13 });
-	const model = await provider!.provideTextContent(opened[0]!.resource) as unknown as { text: string; languageId: string };
+	assert.equal(openedSources[0]!.resource.toString(), resource.toString());
+	assert.deepEqual(openedSources[0]!.options?.selection, { startLineNumber: 1, startColumn: 8, endLineNumber: 1, endColumn: 13 });
+	const model = await provider!.provideTextContent(openedSources[0]!.resource) as unknown as { text: string; languageId: string };
 	assert.equal(model.text, "export const value = 2;\n");
 	assert.equal(model.languageId, "typescript");
 	const fileRequest = requests.find(request => request.pathname.endsWith(`/${created.reviewId}/file`));
@@ -258,6 +292,74 @@ test("real headless source references use API editors or Native Source Workspace
 	assert.equal(fileRequest?.searchParams.has("commit"), false);
 	assert.equal(fileRequest?.searchParams.get("side"), "head");
 	assert.equal(fileRequest?.searchParams.get("file"), "example.ts");
+
+	const rootEntries = await apiSources.children(sourceTreeUri(sourceSelection));
+	assert.deepEqual(rootEntries.map(entry => [entry.name, entry.isDirectory]), [
+		["added.md", false],
+		["example.ts", false],
+		["nested", true],
+		["renamed.ts", false],
+	]);
+	const nested = rootEntries.find(entry => entry.name === "nested")!;
+	const [neighbor] = await apiSources.children(nested.resource);
+	assert.equal(neighbor!.resource.scheme, "review-api-source");
+	assert.equal(new URLSearchParams(neighbor!.resource.query).get("version"), "0");
+	await apiSources.open(sourceLocation(neighbor!.resource));
+	const neighborModel = await provider!.provideTextContent(neighbor!.resource) as unknown as { text: string; languageId: string };
+	assert.equal(neighborModel.text, "export const neighbor = 3;\n");
+	assert.equal(neighborModel.languageId, "typescript");
+	assert.notEqual(openedSources.at(-1)!.resource.toString(), openedSources[0]!.resource.toString());
+
+	for (const file of ["example.ts", "renamed.ts", "added.md", "deleted.ts"]) {
+		await apiSources.openDiff(target.view, file);
+	}
+	assert.equal(openedDiffs[0]!.original.resource.path, "/example.ts");
+	assert.equal(openedDiffs[0]!.modified.resource.path, "/example.ts");
+	assert.equal(openedDiffs[1]!.original.resource.path, "/old-name.ts");
+	assert.equal(openedDiffs[1]!.modified.resource.path, "/renamed.ts");
+	assert.equal(new URLSearchParams(openedDiffs[2]!.original.resource.query).get("empty"), "true");
+	assert.equal(new URLSearchParams(openedDiffs[3]!.modified.resource.query).get("empty"), "true");
+	for (const input of openedDiffs) {
+		for (const side of [input.original.resource, input.modified.resource]) {
+			assert.equal(side.scheme, "review-api-source");
+			assert.equal(new URLSearchParams(side.query).get("version"), "0");
+		}
+	}
+	const baseModel = await provider!.provideTextContent(openedDiffs[0]!.original.resource) as unknown as { text: string; languageId: string };
+	const headModel = await provider!.provideTextContent(openedDiffs[0]!.modified.resource) as unknown as { text: string; languageId: string };
+	assert.deepEqual([baseModel.text, headModel.text], ["export const value = 1;\n", "export const value = 2;\n"]);
+	assert.deepEqual([baseModel.languageId, headModel.languageId], ["typescript", "typescript"]);
+	const addedBase = await provider!.provideTextContent(openedDiffs[2]!.original.resource) as unknown as { text: string };
+	const addedHead = await provider!.provideTextContent(openedDiffs[2]!.modified.resource) as unknown as { text: string; languageId: string };
+	assert.equal(addedBase.text, "");
+	assert.deepEqual([addedHead.text, addedHead.languageId], ["# Added\n", "markdown"]);
+	const deletedBase = await provider!.provideTextContent(openedDiffs[3]!.original.resource) as unknown as { text: string };
+	const deletedHead = await provider!.provideTextContent(openedDiffs[3]!.modified.resource) as unknown as { text: string };
+	assert.equal(deletedBase.text, "export const removed = true;\n");
+	assert.equal(deletedHead.text, "");
+	await assert.rejects(apiSources.openDiff(target.view, "unchanged.ts"), /not changed/);
+	await assert.rejects(
+		async () => provider!.provideTextContent(apiSourceUri({ ...target, file: "missing.ts" })),
+		/unavailable at the pinned commit/,
+	);
+	await assert.rejects(
+		apiSources.children(sourceTreeUri({ reviewId: created.reviewId, kind: "version", version: 999 })),
+		/Review or version not found/,
+	);
+
+	const sharedCreated = await client.post<{ reviewId: string }>("/commands", {
+		commandId: randomUUID(),
+		operation: {
+			type: "create",
+			title: "Shared source route integration",
+			target: { kind: "worktree", repositoryId: registered.id, base: repository.base },
+		},
+	});
+	const sharedSelection = { reviewId: sharedCreated.reviewId, kind: "version" as const, version: 0 };
+	const sharedView = { reviewId: sharedCreated.reviewId, version: 0 };
+	const sharedResource = apiSourceUri({ view: sharedView, side: "head", file: "example.ts" });
+	await apiSources.openDiff(sharedView, "renamed.ts");
+	const sharedDiff = openedDiffs.at(-1)!;
 
 	requests.length = 0;
 	const sharedWindows: Array<{ openables: IWindowOpenable[]; options: IOpenWindowOptions }> = [];
@@ -270,13 +372,21 @@ test("real headless source references use API editors or Native Source Workspace
 		{ warn() {} } as never,
 	);
 	t.after(() => sharedTabs.dispose());
-	assert.equal(await sharedTabs.openSourceEditor({ resource }), true);
-	assert.equal(requests.some(request => request.pathname.endsWith(`/${created.reviewId}/navigator`)), true);
+	await sharedTabs.openApiSource(sharedSelection, "Shared source route integration");
 	assert.equal(sharedWindows.length, 1);
-	const [workspace, file] = sharedWindows[0]!.openables;
+	assert.deepEqual(sharedWindows[0]!.options, { forceNewWindow: true });
+	assert.equal(await sharedTabs.openSourceEditor({ resource: sharedResource }), true);
+	assert.equal(sharedWindows.length, 2);
+	const [workspace, file] = sharedWindows[1]!.openables;
 	assert.ok(workspace && "workspaceUri" in workspace);
 	assert.ok(file && "fileUri" in file);
 	assert.equal(workspace.workspaceUri.scheme, "file");
 	assert.equal(file.fileUri.scheme, "file");
-	assert.deepEqual(sharedWindows[0]!.options, { forceNewWindow: true, gotoLineMode: true, diffMode: false });
+	assert.deepEqual(sharedWindows[1]!.options, { forceNewWindow: true, gotoLineMode: true, diffMode: false });
+	await assert.rejects(
+		sharedTabs.openSourceEditor(sharedDiff),
+		/Open this review in Desktop to prepare language workspaces/,
+	);
+	assert.equal(sharedWindows.length, 2);
+	assert.equal(requests.filter(request => request.pathname.endsWith(`/${sharedCreated.reviewId}/navigator`)).length, 4);
 });

@@ -103,6 +103,11 @@ export class ReviewCanvasEditorTabsService extends Disposable implements IReview
 
 	async openApiSource(selection: ReviewSourceSelection, title: string): Promise<void> {
 		const connection = await this.desktopConnection.getConnection();
+		if (connection.sourceAccessMode === "api-only") {
+			const input = this.inputFor({ kind: "api-source", reviewId: selection.reviewId, selection, title });
+			await this.openReviewInput(input, true);
+			return;
+		}
 		this.requireSharedFilesystem(connection);
 		const result = await this.navigatorWorkspace(connection, selection.reviewId, selection.kind === "version" ? { version: selection.version } : {});
 		await this.host.openWindow([{ workspaceUri: URI.file(result.workspacePath), label: title }], { forceNewWindow: true });
