@@ -23,6 +23,7 @@ import { FILES_EXCLUDE_CONFIG, FileKind, type IFileStat } from "../../../../plat
 import { IInstantiationService, createDecorator } from "../../../../platform/instantiation/common/instantiation.js";
 import { WorkbenchAsyncDataTree } from "../../../../platform/list/browser/listService.js";
 import { ILogService } from "../../../../platform/log/common/log.js";
+import { INotificationService } from "../../../../platform/notification/common/notification.js";
 import { IStorageService, StorageScope, StorageTarget } from "../../../../platform/storage/common/storage.js";
 import { IThemeService } from "../../../../platform/theme/common/themeService.js";
 import { DEFAULT_LABELS_CONTAINER, ResourceLabels, type IResourceLabel } from "../../../../workbench/browser/labels.js";
@@ -103,13 +104,14 @@ const reviewExplorerDelegate: IListVirtualDelegate<IFileStat> = {
  * `ITreeFilter` keeps one rule: what the data source returns is what the tree
  * holds, which is what reveal can reach.
  */
-class ReviewExplorerDataSource implements IAsyncDataSource<URI | null, IFileStat> {
+export class ReviewExplorerDataSource implements IAsyncDataSource<URI | null, IFileStat> {
 	private readonly stats = new Map<string, IFileStat>();
 
 	constructor(
 		private readonly excludes: ResourceGlobMatcher,
 		private readonly logService: ILogService,
 		private readonly apiSource: IReviewApiSourceService,
+		private readonly notifications: INotificationService,
 	) { }
 
 	hasChildren(element: URI | null | IFileStat): boolean {
@@ -139,8 +141,9 @@ class ReviewExplorerDataSource implements IAsyncDataSource<URI | null, IFileStat
 			}
 			return children.sort(compareReviewExplorerStats);
 		} catch (error) {
-			// Keep other directories usable when a pinned source request fails.
+			// Keep other directories usable while making a missing pin or source visible.
 			this.logService.trace(`[review] explorer cannot resolve ${resource.fsPath}: ${error}`);
+			this.notifications.error(error);
 			return [];
 		}
 	}
@@ -235,6 +238,7 @@ export class ReviewExplorerPart extends Part {
 		@IEditorGroupsService private readonly editorGroupsService: IEditorGroupsService,
 		@IConfigurationService private readonly configurationService: IConfigurationService,
 		@ILogService private readonly logService: ILogService,
+		@INotificationService private readonly notifications: INotificationService,
 		@IReviewApiSourceService private readonly apiSource: IReviewApiSourceService,
 		@IReviewApiCatalogService private readonly catalog: IReviewApiCatalogService,
 		@IReviewCanvasEditorTabsService private readonly tabsService: IReviewCanvasEditorTabsService,
@@ -286,7 +290,7 @@ export class ReviewExplorerPart extends Part {
 			),
 		);
 
-		const dataSource = new ReviewExplorerDataSource(excludes, this.logService, this.apiSource);
+		const dataSource = new ReviewExplorerDataSource(excludes, this.logService, this.apiSource, this.notifications);
 		this.dataSource = dataSource;
 
 		// A settings change can hide a folder that is currently expanded, so rebuild

@@ -86,6 +86,7 @@ import { ReviewEmbeddedEditors } from "../../../services/reviewEmbeddedEditors.j
 import { IReviewTelemetryService } from "../../../services/reviewTelemetryService.js";
 
 import "../../media/review.css";
+import { IReviewExplorerPartsService } from "../explorer/reviewExplorerPart.js";
 import { ReviewSessionTelemetry } from "../../reviewSessionTelemetry.js";
 import { applyReviewThemeChoice, currentReviewThemeChoice } from "../../reviewThemeChoice.js";
 import { ReviewCanvasEditorInput } from "./reviewCanvasEditorInput.js";
@@ -168,6 +169,8 @@ export class ReviewCanvasEditorPane extends EditorPane {
 		@IReviewVerbsService private readonly verbs: IReviewVerbsService,
 		@IReviewCanvasEditorTabsService
 		private readonly tabsService: IReviewCanvasEditorTabsService,
+		@IReviewExplorerPartsService
+		private readonly explorerParts: IReviewExplorerPartsService,
 		@IInstantiationService
 		reviewInstantiationService: IInstantiationService,
 		@IHostService private readonly hostService: IHostService,
@@ -250,6 +253,11 @@ export class ReviewCanvasEditorPane extends EditorPane {
 				}
 			}),
 		);
+	}
+
+	private async openSourceTree(selection: ReviewSourceSelection, title: string): Promise<void> {
+		await this.tabsService.openApiSource(selection, title);
+		this.explorerParts.show();
 	}
 
 	protected override createEditor(parent: HTMLElement): void {
@@ -422,7 +430,7 @@ export class ReviewCanvasEditorPane extends EditorPane {
 							request: requestReviewApi,
 							post: async (request) => {
 								if (request.name === "openSourceTree") {
-									await this.tabsService.openApiSource(sourceSelection, input.getName());
+									await this.openSourceTree(sourceSelection, input.getName());
 									return { ok: true };
 								}
 								if (request.name === "reveal") {
@@ -507,7 +515,7 @@ export class ReviewCanvasEditorPane extends EditorPane {
 						openSourceTree: (uuid) => {
 							const api = this.apiCatalog.reviews.find((review) => review.reviewId === uuid);
 							if (api) {
-								void this.tabsService.openApiSource({ reviewId: api.reviewId, kind: "current" }, api.title).catch(error => this.notificationService.error(error));
+								void this.openSourceTree({ reviewId: api.reviewId, kind: "current" }, api.title).catch(error => this.notificationService.error(error));
 								return;
 							}
 						},
