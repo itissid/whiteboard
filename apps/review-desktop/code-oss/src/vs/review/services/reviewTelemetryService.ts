@@ -5,15 +5,14 @@
 
 import { IConfigurationService } from "../../platform/configuration/common/configuration.js";
 import { createDecorator } from "../../platform/instantiation/common/instantiation.js";
-import { IMainProcessService } from "../../platform/ipc/common/mainProcessService.js";
 import { ILifecycleService } from "../../workbench/services/lifecycle/common/lifecycle.js";
-import {
-	REVIEW_DESKTOP_CHANNEL,
-	type ReviewDesktopConnection,
-} from "../common/reviewDesktopBootstrap.js";
 import { REVIEW_TELEMETRY_SETTING } from "../common/reviewConfigurationDefaults.js";
 import type { ReviewErrorReport } from "../common/reviewErrorReport.js";
 import { reviewTelemetryEventRequest } from "../common/reviewTelemetryRequest.js";
+import {
+	IReviewDesktopConnectionService,
+	type ReviewServerConnection,
+} from "./reviewDesktopConnectionService.js";
 
 type ReviewTelemetryProperties = Record<string, string | number | boolean>;
 
@@ -53,18 +52,17 @@ export class ReviewTelemetryService implements IReviewTelemetryService {
 
 	private readonly queued: QueuedReviewTelemetryEvent[] = [];
 	private readonly inFlight = new Set<Promise<void>>();
-	private readonly connectionPromise: Promise<ReviewDesktopConnection | undefined>;
-	private connection: ReviewDesktopConnection | undefined;
+	private readonly connectionPromise: Promise<ReviewServerConnection | undefined>;
+	private connection: ReviewServerConnection | undefined;
 
 	constructor(
-		@IMainProcessService mainProcessService: IMainProcessService,
+		@IReviewDesktopConnectionService connectionService: IReviewDesktopConnectionService,
 		@IConfigurationService
 		private readonly configurationService: IConfigurationService,
 		@ILifecycleService lifecycleService: ILifecycleService,
 	) {
-		this.connectionPromise = mainProcessService
-			.getChannel(REVIEW_DESKTOP_CHANNEL)
-			.call<ReviewDesktopConnection>("getConnection")
+		this.connectionPromise = connectionService
+			.getConnection()
 			.then((connection) => {
 				this.connection = connection;
 				this.drainQueue();
@@ -114,7 +112,7 @@ export class ReviewTelemetryService implements IReviewTelemetryService {
 		if (!connection) return;
 		let request: Promise<void>;
 		request = fetch(
-			`${connection.url}/telemetry/event`,
+			`${connection.serverUrl}/telemetry/event`,
 			reviewTelemetryEventRequest(
 				connection,
 				event,

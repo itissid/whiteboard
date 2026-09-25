@@ -13,6 +13,7 @@ import "./browser/parts/canvas/reviewCanvasEditor.contribution.js";
 import "./browser/parts/canvas/reviewFind.contribution.js";
 import "./browser/reviewCommunity.contribution.js";
 import "./browser/reviewTheme.contribution.js";
+import "./contrib/connection/reviewServerProfile.contribution.js";
 import "./contrib/explorer/reviewFileTree.contribution.js";
 import "./contrib/extensions/reviewCuratedExtensions.contribution.js";
 import "./contrib/install/reviewCliInstall.contribution.js";

@@ -5,8 +5,11 @@
 
 import { Emitter,Event } from "../../base/common/event.js";
 import { Disposable } from "../../base/common/lifecycle.js";
+import { generateUuid } from "../../base/common/uuid.js";
+import { ConfigurationTarget, IConfigurationService } from "../../platform/configuration/common/configuration.js";
 import { createDecorator } from "../../platform/instantiation/common/instantiation.js";
 import { IMainProcessService } from "../../platform/ipc/common/mainProcessService.js";
+import { ISecretStorageService } from "../../platform/secrets/common/secrets.js";
 import { IStorageService,StorageScope,StorageTarget } from "../../platform/storage/common/storage.js";
 import {
 REVIEW_DESKTOP_CHANNEL,
@@ -31,6 +34,13 @@ type ReviewTutorialOpenResponse,
 type ReviewVerbResponse
 } from "../common/reviewProtocol.js";
 import { reconnectUntilAborted } from "../common/reviewReconnect.js";
+import {
+	parseReviewServerProfile,
+	REVIEW_SERVER_PROFILE_SETTING,
+	reviewServerProfileTokenKey,
+	type CreateRemoteReviewServerProfileInput,
+	type ReviewServerConnectionProfile,
+} from "../common/reviewServerProfile.js";
 
 const REVIEW_TUTORIAL_AUTOPREPARE_SUPPRESSED_KEY = "review.tutorial.autoPrepareSuppressed.v1";
 
@@ -56,6 +66,7 @@ export interface IReviewDesktopConnectionService {
 	readonly onDidChangeConnection: Event<void>;
 	initialize(): Promise<void>;
 	getConnection(): Promise<ReviewServerConnection>;
+	createAndActivateRemoteProfile(input: CreateRemoteReviewServerProfileInput): Promise<void>;
 	readDiffrConfig(): Promise<ReviewDiffrConfig>;
 	saveDiffrSummarizer(input: ReviewDiffrSummarizerInput): Promise<ReviewDiffrConfig>;
 	testDiffrSummarizer(input: ReviewDiffrSummarizerInput): Promise<string>;
@@ -118,6 +129,8 @@ export class ReviewDesktopConnectionService extends Disposable implements IRevie
 		@IMainProcessService
 		private readonly mainProcessService: IMainProcessService,
 		@IStorageService private readonly storageService: IStorageService,
+		@IConfigurationService private readonly configurationService: IConfigurationService,
+		@ISecretStorageService private readonly secretStorageService: ISecretStorageService,
 	) {
 		super();
 	}
@@ -131,6 +144,15 @@ export class ReviewDesktopConnectionService extends Disposable implements IRevie
 
 	private async connect(): Promise<void> {
 		if (this.connection) return;
+		const profile = parseReviewServerProfile(this.configurationService.getValue(REVIEW_SERVER_PROFILE_SETTING));
+		if (profile) {
+			const token = await this.secretStorageService.get(reviewServerProfileTokenKey(profile.id));
+			if (!token) throw new Error(`The Review Server Token for “${profile.name}” is missing.`);
+			const prepared = await this.prepareRemoteConnection(profile, token);
+			await prepared.activate();
+			this.connection = prepared.connection;
+			return;
+		}
 		const connection = (await this.mainProcessService
 			.getChannel(REVIEW_DESKTOP_CHANNEL)
 			.call("getConnection")) as ReviewDesktopConnection;
@@ -152,6 +174,34 @@ export class ReviewDesktopConnectionService extends Disposable implements IRevie
 		await this.initialize();
 		const { token, appSessionId, sourceAccessMode } = this.requireConnection();
 		return { serverUrl: this.serverUrl, token, appSessionId, sourceAccessMode };
+	}
+
+	async createAndActivateRemoteProfile(input: CreateRemoteReviewServerProfileInput): Promise<void> {
+		const profile = parseReviewServerProfile({
+			id: generateUuid(),
+			name: input.name,
+			serverUrl: input.serverUrl,
+			sourceAccessMode: "api-only",
+		});
+		if (!profile) throw new Error("The Review Server Connection Profile is required.");
+		if (!input.token) throw new Error("Enter a Review Server Token.");
+		const prepared = await this.prepareRemoteConnection(profile, input.token);
+		const secretKey = reviewServerProfileTokenKey(profile.id);
+		await this.secretStorageService.set(secretKey, input.token);
+		try {
+			await this.configurationService.updateValue(
+				REVIEW_SERVER_PROFILE_SETTING,
+				profile,
+				ConfigurationTarget.USER,
+			);
+		} catch (error) {
+			await this.secretStorageService.delete(secretKey);
+			throw error;
+		}
+		await prepared.activate();
+		this.connection = prepared.connection;
+		this.initializePromise = Promise.resolve();
+		this.connectionChanged.fire();
 	}
 
 	/**
@@ -441,9 +491,11 @@ export class ReviewDesktopConnectionService extends Disposable implements IRevie
 	}
 
 	private async initializeGlobalState(): Promise<void> {
-    await this.connect();
-    await this.waitForHealth();
-  }
+		await this.connect();
+		if (this.requireConnection().sourceAccessMode === "shared-filesystem") {
+			await this.waitForHealth();
+		}
+	}
 
 	private async initializeAndMaintainControl(
 		dispatch: (value: JsonValue) => Promise<ReviewVerbResponse>,
@@ -475,6 +527,60 @@ export class ReviewDesktopConnectionService extends Disposable implements IRevie
 			await new Promise((resolve) => setTimeout(resolve, 100));
 		}
 		throw new Error("The embedded Whiteboard server did not become healthy.");
+	}
+
+	private async prepareRemoteConnection(
+		profile: ReviewServerConnectionProfile,
+		token: string,
+	): Promise<{ readonly connection: ReviewDesktopConnection; activate(): Promise<void> }> {
+		const channel = this.mainProcessService.getChannel(REVIEW_DESKTOP_CHANNEL);
+		const appSessionId = await channel.call<string>("getAppSessionId");
+		const instanceId = await this.validateRemoteProfile(profile, token);
+		return {
+			connection: {
+				version: REVIEW_DESKTOP_CONNECTION_VERSION,
+				url: profile.serverUrl,
+				token,
+				instanceId,
+				appSessionId,
+				sourceAccessMode: profile.sourceAccessMode,
+			},
+			activate: async () => { await channel.call("activateRemoteProfile"); },
+		};
+	}
+
+	private async validateRemoteProfile(profile: ReviewServerConnectionProfile, token: string): Promise<string> {
+		const request = async (path: string): Promise<Response> => {
+			try {
+				const response = await fetch(`${profile.serverUrl}${path}`, {
+					headers: { "x-review-token": token },
+					signal: AbortSignal.timeout(5_000),
+				});
+				if (response.status === 401 || response.status === 403) {
+					throw new Error(`The Review Server rejected the token for “${profile.name}”.`);
+				}
+				return response;
+			} catch (error) {
+				if (error instanceof Error && error.message.includes("rejected the token")) throw error;
+				throw new Error(`The Review Server “${profile.name}” is unreachable.`, { cause: error });
+			}
+		};
+		const health = await request("/health");
+		const healthPayload = await health.json().catch(() => undefined) as { ok?: unknown; instanceId?: unknown } | undefined;
+		if (!health.ok || healthPayload?.ok !== true || typeof healthPayload.instanceId !== "string" || !healthPayload.instanceId) {
+			throw new Error(`The Review Server “${profile.name}” returned an incompatible health response.`);
+		}
+		const capabilities = await request("/reviews-api/capabilities");
+		const capabilityPayload = await capabilities.json().catch(() => undefined) as Record<string, unknown> | undefined;
+		if (
+			!capabilities.ok || !capabilityPayload ||
+			typeof capabilityPayload.desktopAvailable !== "boolean" ||
+			typeof capabilityPayload.softwareMapEnabled !== "boolean" ||
+			typeof capabilityPayload.scratchpadEnabled !== "boolean"
+		) {
+			throw new Error(`The Review Server “${profile.name}” is not compatible with this Whiteboard Desktop.`);
+		}
+		return healthPayload.instanceId;
 	}
 
 

@@ -21,6 +21,7 @@ import { localize } from '../../nls.js';
 import { Registry } from '../../platform/registry/common/platform.js';
 import { ConfigurationScope, Extensions, type IConfigurationRegistry } from '../../platform/configuration/common/configurationRegistry.js';
 import { REVIEW_KEYMAPS, REVIEW_KEYMAP_SETTING, REVIEW_SOFTWARE_MAP_SETTING, REVIEW_STRUCTURAL_DIFF_SETTING, REVIEW_TELEMETRY_SETTING, curatedExtensionConfigurationDefaults, reviewConfigurationDefaults } from './reviewConfigurationDefaults.js';
+import { REVIEW_SERVER_PROFILE_SETTING } from './reviewServerProfile.js';
 
 const configurationRegistry = Registry.as<IConfigurationRegistry>(Extensions.Configuration);
 
@@ -50,6 +51,18 @@ configurationRegistry.registerConfiguration({
 			type: 'boolean',
 			default: false,
 			description: localize('review.experimental.softwareMap.enabled', "Show the experimental Software Map view in sessions."),
+		},
+		[REVIEW_SERVER_PROFILE_SETTING]: {
+			type: ['object', 'null'],
+			default: null,
+			description: localize('review.serverConnectionProfile', "The active Review Server Connection Profile. Its token is stored separately in OS-backed secret storage."),
+			additionalProperties: false,
+			properties: {
+				id: { type: 'string' },
+				name: { type: 'string' },
+				serverUrl: { type: 'string' },
+				sourceAccessMode: { type: 'string', enum: ['api-only'] },
+			},
 		},
 	},
 });
