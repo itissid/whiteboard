@@ -29,6 +29,35 @@ import {
 } from "./process-error-telemetry.js";
 import type { ReviewTelemetryCapture } from "./ui-telemetry.js";
 
+const WHITEBOARD_DESKTOP_ORIGIN = "vscode-file://vscode-app";
+const HEADLESS_CORS_METHODS = "GET, HEAD, POST, OPTIONS";
+const HEADLESS_CORS_HEADERS =
+  "content-type, x-review-token, x-review-app-session-id";
+
+function applyWhiteboardDesktopCors(
+  request: Request,
+  response: Response,
+): Response {
+  const vary = response.headers.get("vary");
+  const varyFields = vary
+    ?.split(",")
+    .map((field) => field.trim().toLowerCase());
+
+  if (!varyFields?.includes("*") && !varyFields?.includes("origin")) {
+    response.headers.set("vary", vary ? `${vary}, Origin` : "Origin");
+  }
+
+  if (request.headers.get("origin") !== WHITEBOARD_DESKTOP_ORIGIN) {
+    return response;
+  }
+
+  response.headers.set("access-control-allow-origin", WHITEBOARD_DESKTOP_ORIGIN);
+  response.headers.set("access-control-allow-methods", HEADLESS_CORS_METHODS);
+  response.headers.set("access-control-allow-headers", HEADLESS_CORS_HEADERS);
+  response.headers.set("access-control-allow-private-network", "true");
+  return response;
+}
+
 interface HeadlessServerInput {
   stateDir: string;
   port?: number;
@@ -84,6 +113,21 @@ async function serve(input: HeadlessServerInput) {
   };
 
   const app = new Hono<ReviewHonoEnv>();
+  app.use("*", async (context, next) => {
+    await next();
+    applyWhiteboardDesktopCors(context.req.raw, context.res);
+  });
+  app.options("*", (context) =>
+    applyWhiteboardDesktopCors(
+      context.req.raw,
+      new Response(null, {
+        status:
+          context.req.raw.headers.get("origin") === WHITEBOARD_DESKTOP_ORIGIN
+            ? 204
+            : 403,
+      }),
+    ),
+  );
   app.use("*", async (context, next) => {
     if (!isAuthorizedRequest(context.req.raw, discovery.token))
       return context.json({ error: "Unauthorized" }, 401);

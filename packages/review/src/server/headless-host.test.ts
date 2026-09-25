@@ -727,6 +727,86 @@ it("continues to generate process-scoped credentials without configuration", asy
   ).toBe(200);
 });
 
+it("allows Whiteboard Desktop to preflight authenticated headless requests", async () => {
+  const server = await start();
+  const response = await fetch(`${server.discovery.url}/health`, {
+    method: "OPTIONS",
+    headers: {
+      origin: "vscode-file://vscode-app",
+      "access-control-request-method": "GET",
+      "access-control-request-headers": "x-review-token",
+    },
+  });
+
+  expect(response.status).toBe(204);
+  expect(response.headers.get("access-control-allow-origin")).toBe(
+    "vscode-file://vscode-app",
+  );
+  expect(response.headers.get("access-control-allow-methods"))
+    .toBe("GET, HEAD, POST, OPTIONS");
+  expect(response.headers.get("access-control-allow-headers"))
+    .toBe("content-type, x-review-token, x-review-app-session-id");
+  expect(response.headers.get("access-control-allow-private-network"))
+    .toBe("true");
+  expect(response.headers.get("vary")).toContain("Origin");
+});
+
+it("does not grant another browser origin access to the headless server", async () => {
+  const server = await start();
+  const origin = "https://untrusted.example";
+  const preflight = await fetch(`${server.discovery.url}/health`, {
+    method: "OPTIONS",
+    headers: {
+      origin,
+      "access-control-request-method": "GET",
+      "access-control-request-headers": "x-review-token",
+    },
+  });
+
+  expect(preflight.status).toBe(403);
+  expect(preflight.headers.get("access-control-allow-origin")).toBeNull();
+  expect(preflight.headers.get("access-control-allow-methods")).toBeNull();
+  expect(preflight.headers.get("access-control-allow-headers")).toBeNull();
+  expect(preflight.headers.get("vary")).toContain("Origin");
+
+  const authenticated = await fetch(`${server.discovery.url}/health`, {
+    headers: {
+      origin,
+      "x-review-token": server.discovery.token,
+    },
+  });
+
+  expect(authenticated.status).toBe(200);
+  expect(authenticated.headers.get("access-control-allow-origin")).toBeNull();
+  expect(authenticated.headers.get("vary")).toContain("Origin");
+});
+
+it("lets Whiteboard Desktop read authenticated and rejected headless responses", async () => {
+  const server = await start();
+  const origin = "vscode-file://vscode-app";
+  const authenticated = await fetch(`${server.discovery.url}/health`, {
+    headers: {
+      origin,
+      "x-review-token": server.discovery.token,
+    },
+  });
+
+  expect(authenticated.status).toBe(200);
+  expect(authenticated.headers.get("access-control-allow-origin")).toBe(origin);
+  expect(authenticated.headers.get("vary")).toContain("Origin");
+
+  const rejected = await fetch(`${server.discovery.url}/health`, {
+    headers: {
+      origin,
+      "x-review-token": "invalid-token",
+    },
+  });
+
+  expect(rejected.status).toBe(401);
+  expect(rejected.headers.get("access-control-allow-origin")).toBe(origin);
+  expect(rejected.headers.get("vary")).toContain("Origin");
+});
+
 it("authenticates clients, reports capabilities and readiness without exposing the token, and diagnoses unavailable commits", async () => {
   const server = await start(undefined, true);
   expect(await reviewServerIsHealthy(server.discovery)).toBe(true);
