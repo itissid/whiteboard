@@ -23,6 +23,7 @@ import { ReviewApiCatalogService } from "./reviewApiCatalogService.js";
 import { ReviewApiSourceService } from "./reviewApiSourceService.js";
 import { ReviewCanvasEditorTabsService } from "./reviewCanvasEditorTabsService.js";
 import { ReviewDesktopConnectionService } from "./reviewDesktopConnectionService.js";
+import { openActiveReviewSourceInVsCode } from "./reviewExternalSourceOpenerService.js";
 
 class TestStorage {
 	getBoolean(_key: string, _scope: unknown, fallback: boolean): boolean { return fallback; }
@@ -360,6 +361,45 @@ test("real headless source references use API editors or Native Source Workspace
 	const sharedResource = apiSourceUri({ view: sharedView, side: "head", file: "example.ts" });
 	await apiSources.openDiff(sharedView, "renamed.ts");
 	const sharedDiff = openedDiffs.at(-1)!;
+
+	const handoffs: unknown[] = [];
+	assert.deepEqual(await openActiveReviewSourceInVsCode({
+		connection,
+		profile: {
+			id: "remote-profile",
+			name: "Headless integration server",
+			serverUrl: discovery.url,
+			sourceAccessMode: "api-only",
+			externalSourceOpener: {
+				executable: "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code",
+				authority: "development-host",
+			},
+		},
+		editor: {
+			getModel: () => ({ uri: resource }),
+			getSelection: () => ({ getStartPosition: () => ({ lineNumber: 1, column: 8 }) }),
+			getPosition: () => null,
+		},
+		processAdapter: {
+			open: async request => {
+				handoffs.push(request);
+				return { status: "accepted" };
+			},
+		},
+	}), { status: "accepted" });
+	assert.equal(handoffs.length, 1);
+	const handoff = handoffs[0] as { executable: string; authority: string; filePath: string; lineNumber: number; column: number };
+	assert.equal(handoff.executable, "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code");
+	assert.equal(handoff.authority, "development-host");
+	assert.equal(path.isAbsolute(handoff.filePath), true);
+	assert.equal(handoff.filePath.endsWith("/example.ts"), true);
+	assert.equal(handoff.lineNumber, 1);
+	assert.equal(handoff.column, 8);
+	const navigatorRequest = requests.find(request => request.pathname.endsWith(`/${created.reviewId}/navigator`));
+	assert.equal(navigatorRequest?.searchParams.get("version"), "0");
+	assert.equal(navigatorRequest?.searchParams.get("side"), "head");
+	assert.equal(navigatorRequest?.searchParams.get("file"), "example.ts");
+	assert.equal(navigatorRequest?.searchParams.get("external"), "true");
 
 	requests.length = 0;
 	const sharedWindows: Array<{ openables: IWindowOpenable[]; options: IOpenWindowOptions }> = [];

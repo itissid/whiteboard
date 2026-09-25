@@ -17,12 +17,17 @@ import { NullTelemetryService } from "../../platform/telemetry/common/telemetryU
 import { IUpdateService } from "../../platform/update/common/update.js";
 import { UtilityProcess } from "../../platform/utilityProcess/electron-main/utilityProcess.js";
 import type { ReviewDesktopConnection } from "../common/reviewDesktopBootstrap.js";
+import {
+  parseReviewExternalSourceOpenRequest,
+  type ReviewExternalSourceOpenResult,
+} from "../common/reviewExternalSourceOpener.js";
 import { REVIEW_TELEMETRY_SETTING } from "../common/reviewConfigurationDefaults.js";
 import { REVIEW_CRASH_DUMPS_DIRNAME } from "../node/reviewCrashReporter.js";
 import { ReviewCrashDumps } from "./reviewCrashDumps.js";
 import { ReviewCrashTelemetry } from "./reviewCrashTelemetry.js";
 import { ReviewMainErrorTelemetry } from "./reviewMainErrorTelemetry.js";
 import { ReviewServerSupervisor } from "./reviewServerSupervisor.js";
+import { openInVsCodeRemoteSsh } from "./reviewVsCodeRemoteSourceOpener.js";
 import {
   darwinShipItLogPath,
   ReviewUpdateTelemetry,
@@ -209,6 +214,10 @@ export class ReviewDesktopHost extends Disposable {
   activateEmbeddedConnection(): void {
     this.remoteProfileActive = false;
     this.embeddedConnectionRequested = false;
+  }
+
+  openExternalSource(input: unknown): Promise<ReviewExternalSourceOpenResult> {
+    return openInVsCodeRemoteSsh(parseReviewExternalSourceOpenRequest(input));
   }
 
   stageRustAnalyzer(): void {

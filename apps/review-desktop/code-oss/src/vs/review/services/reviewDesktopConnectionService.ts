@@ -273,7 +273,10 @@ export class ReviewDesktopConnectionService extends Disposable implements IRevie
 		const current = this.requireRemoteProfiles();
 		const index = current.profiles.findIndex(profile => profile.id === profileId);
 		if (index === -1) throw new Error("The Review Server Connection Profile does not exist.");
-		const profile = this.profileFromInput(profileId, input);
+		const profile = this.profileFromInput(profileId, {
+			...input,
+			externalSourceOpener: current.profiles[index]!.externalSourceOpener,
+		});
 		const profiles = [...current.profiles];
 		profiles[index] = profile;
 		const next = { ...current, profiles };
@@ -344,9 +347,15 @@ export class ReviewDesktopConnectionService extends Disposable implements IRevie
 
 	private profileFromInput(
 		id: string,
-		input: Pick<CreateRemoteReviewServerProfileInput, "name" | "serverUrl">,
+		input: Pick<CreateRemoteReviewServerProfileInput, "name" | "serverUrl" | "externalSourceOpener">,
 	): ReviewServerConnectionProfile {
-		const profile = parseReviewServerProfile({ id, name: input.name, serverUrl: input.serverUrl, sourceAccessMode: "api-only" });
+		const profile = parseReviewServerProfile({
+			id,
+			name: input.name,
+			serverUrl: input.serverUrl,
+			sourceAccessMode: "api-only",
+			...(input.externalSourceOpener ? { externalSourceOpener: input.externalSourceOpener } : {}),
+		});
 		if (!profile) throw new Error("The Review Server Connection Profile is required.");
 		return profile;
 	}

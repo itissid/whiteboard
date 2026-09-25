@@ -70,6 +70,15 @@ configurationRegistry.registerConfiguration({
 							name: { type: 'string' },
 							serverUrl: { type: 'string' },
 							sourceAccessMode: { type: 'string', enum: ['api-only'] },
+							externalSourceOpener: {
+								type: 'object',
+								additionalProperties: false,
+								required: ['executable', 'authority'],
+								properties: {
+									executable: { type: 'string' },
+									authority: { type: 'string' },
+								},
+							},
 						},
 					},
 				},

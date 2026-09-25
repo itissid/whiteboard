@@ -89,7 +89,15 @@ test("multiple profiles keep stable identifiers while metadata and profile-speci
 	const service = createService();
 	t.after(() => service.dispose());
 
-	await service.createAndActivateRemoteProfile({ name: "Development", serverUrl: "http://127.0.0.1:5500", token: "development-token" });
+	await service.createAndActivateRemoteProfile({
+		name: "Development",
+		serverUrl: "http://127.0.0.1:5500",
+		token: "development-token",
+		externalSourceOpener: {
+			executable: "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code",
+			authority: "development-host",
+		},
+	});
 	const first = service.getRemoteProfiles().profiles[0]!;
 	await service.createAndActivateRemoteProfile({ name: "Staging", serverUrl: "https://review.example.test", token: "staging-token" });
 	const created = service.getRemoteProfiles();
@@ -106,6 +114,7 @@ test("multiple profiles keep stable identifiers while metadata and profile-speci
 	const edited = service.getRemoteProfiles();
 	assert.equal(edited.profiles[0]!.id, first.id);
 	assert.equal(edited.profiles[0]!.name, "Development renamed");
+	assert.deepEqual(edited.profiles[0]!.externalSourceOpener, first.externalSourceOpener);
 	assert.equal(secrets.get(reviewServerProfileTokenKey(first.id)), "development-token");
 	assert.equal(edited.activeProfileId, created.profiles[1]!.id);
 

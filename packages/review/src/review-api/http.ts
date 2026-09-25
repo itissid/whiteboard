@@ -646,18 +646,20 @@ export function createReviewApi(
           side: z.enum(["base", "head"]).default("head"),
           file: z.string().min(1).optional(),
           empty: z.literal("true").optional(),
+          external: z.literal("true").optional(),
         })
         .parse(context.req.query());
 
+      const snapshot = readReview(context.req.param("id"), input.version);
+      const source = { ...input, anchor: queryAnchor(input) };
+
       return context.json(
-        await data.navigatorWorkspace(
-          readReview(context.req.param("id"), input.version),
-          {
-            ...input,
-            empty: input.empty === "true",
-            anchor: queryAnchor(input),
-          },
-        ),
+        input.external === "true"
+          ? await data.externalSourceDestination(snapshot, source)
+          : await data.navigatorWorkspace(snapshot, {
+              ...source,
+              empty: input.empty === "true",
+            }),
       );
     });
     app.get("/:id/tree", async (context) => {

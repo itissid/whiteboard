@@ -452,6 +452,62 @@ export class LocalReviewData {
     return { workspacePath, filePath };
   }
 
+  /** Resolve a pinned server-side file without requiring a Desktop workspace. */
+  async externalSourceDestination(
+    snapshot: Snapshot,
+    source: {
+      side?: "base" | "head";
+      file?: string;
+      commit?: string;
+      anchor?: SourcePins;
+    },
+  ): Promise<{ workspacePath: string; filePath?: string }> {
+    const { pins } = await this.resolveSource(
+      snapshot,
+      source.commit,
+      source.anchor,
+    );
+
+    const repository = this.store.repositoryPath(pins.repositoryId);
+    const side = source.side ?? "head";
+
+    if (source.file) checkRelativePath(source.file);
+
+    const live = !!pins.worktreeRevision && side === "head";
+
+    const workspacePath = live
+      ? await realpath(repository)
+      : await ensureReviewPinnedCheckout({
+          rootPath: repository,
+          ref: pins[side],
+          reviewUuid: snapshot.reviewId,
+          role: side,
+        });
+
+    if (!workspacePath)
+      throw new ReviewInputError(
+        "Could not prepare the selected source checkout.",
+        409,
+      );
+
+    let filePath: string | undefined;
+
+    if (source.file) {
+      try {
+        filePath = await localSourcePath(workspacePath, source.file);
+      } catch (error) {
+        if (isMissingFileError(error))
+          throw new ReviewInputError(
+            "File is unavailable at the selected revision.",
+            404,
+          );
+        throw error;
+      }
+    }
+
+    return { workspacePath, filePath };
+  }
+
   /** A document read that needs default pins; 409 when the document has none. */
   async documentPins(snapshot: Snapshot): Promise<Pins> {
     const pins = await this.sourcePins(snapshot);

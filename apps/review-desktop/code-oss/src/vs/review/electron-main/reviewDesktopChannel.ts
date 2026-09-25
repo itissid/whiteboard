@@ -22,7 +22,7 @@ export class ReviewDesktopChannel implements IServerChannel {
     return Event.None as Event<T>;
   }
 
-  async call<T>(_context: string, command: string): Promise<T> {
+  async call<T>(_context: string, command: string, arg?: unknown): Promise<T> {
     if (command === "getConnection") {
       const connection: ReviewDesktopConnection = await this.host.requestEmbeddedConnection();
       return connection as T;
@@ -37,6 +37,9 @@ export class ReviewDesktopChannel implements IServerChannel {
     if (command === "activateEmbeddedConnection") {
       this.host.activateEmbeddedConnection();
       return undefined as T;
+    }
+    if (command === "openExternalSource") {
+      return (await this.host.openExternalSource(arg)) as T;
     }
     if (command === "stageRustAnalyzer") {
       this.host.stageRustAnalyzer();
