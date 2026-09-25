@@ -87,11 +87,21 @@ test("API-only source requests stay out of Native Source Workspaces", async (t) 
 		{ async openWindow() { windows += 1; } } as never,
 		{ warn() {} } as never,
 	);
-	t.after(() => tabs.dispose());
+	const resolver = new ReviewEditorResolverService(
+		{} as never,
+		{ invokeFunction: (fn: (accessor: unknown) => unknown) => fn({ get: () => tabs }) } as never,
+		{} as never, {} as never, {} as never,
+		{ get: () => "[]", remove() {}, onWillSaveState: Event.None } as never,
+		{ onDidRegisterExtensions: Event.None } as never, {} as never,
+	);
+	t.after(() => { resolver.dispose(); tabs.dispose(); });
+	const stock = t.mock.method(EditorResolverService.prototype, "resolveEditor", async () => ResolvedStatus.NONE);
 	const view = { reviewId: "review-a", version: 7, pins: { repositoryId: "repository", head: "head-sha", base: "base-sha" } };
 	const source = apiSourceUri({ view, side: "head", file: "source.ts" });
+	const input = { resource: source, options: { selection: { startLineNumber: 4, startColumn: 2 } } };
 
-	assert.equal(await tabs.openSourceEditor({ resource: source }), false);
+	assert.equal(await resolver.resolveEditor(input, undefined), ResolvedStatus.NONE);
+	assert.equal(stock.mock.calls[0].arguments[0], input);
 	assert.equal(await tabs.openSourceReferences(source, { lineNumber: 4, column: 2 }), false);
 	await assert.rejects(
 		tabs.openApiSource({ reviewId: "review-a", kind: "version", version: 7 }, "Remote Review"),

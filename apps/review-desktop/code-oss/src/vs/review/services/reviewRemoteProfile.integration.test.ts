@@ -11,9 +11,16 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 
+import { Event } from "../../base/common/event.js";
+import { URI } from "../../base/common/uri.js";
+import type { ITextModelContentProvider } from "../../editor/common/services/resolverService.js";
+import type { IOpenWindowOptions, IWindowOpenable } from "../../platform/window/common/window.js";
 import { REVIEW_SERVER_PROFILE_SETTING, reviewServerProfileTokenKey } from "../common/reviewServerProfile.js";
+import { apiSourceUri } from "../common/reviewSourceView.js";
 import { ReviewApiClient } from "../common/reviewProtocol.js";
 import { ReviewApiCatalogService } from "./reviewApiCatalogService.js";
+import { ReviewApiSourceService } from "./reviewApiSourceService.js";
+import { ReviewCanvasEditorTabsService } from "./reviewCanvasEditorTabsService.js";
 import { ReviewDesktopConnectionService } from "./reviewDesktopConnectionService.js";
 
 class TestStorage {
@@ -156,4 +163,120 @@ test("a saved API-only profile retries real authentication without embedded fall
 	assert.deepEqual((authored as { document: Array<{ type: string; markdown: string }> }).document
 		.map(({ type, markdown }) => ({ type, markdown })), [{ type: "markdown", markdown: "Authored remotely" }]);
 	assert.equal((await client.read<{ text: string }>(`/${created.reviewId}/file?side=head&file=example.ts`)).text, "export const value = 2;\n");
+});
+
+test("real headless source references use API editors or Native Source Workspaces by capability", async (t) => {
+	const headlessHostUrl = new URL("../../../../../../../packages/review/src/server/headless-host.ts", import.meta.url).href;
+	const { runHeadlessServer } = await import(headlessHostUrl) as {
+		runHeadlessServer(input: {
+			stateDir: string;
+			signal: AbortSignal;
+			onReady(discovery: { instanceId: string; url: string; token: string }): void;
+		}): Promise<void>;
+	};
+	const root = await mkdtemp(path.join(tmpdir(), "whiteboard-api-source-editor-"));
+	const controller = new AbortController();
+	const ready = Promise.withResolvers<{ instanceId: string; url: string; token: string }>();
+	const running = runHeadlessServer({ stateDir: path.join(root, "state"), signal: controller.signal, onReady: ready.resolve });
+	t.after(async () => {
+		controller.abort();
+		await running;
+		await rm(root, { recursive: true, force: true });
+	});
+	const discovery = await ready.promise;
+	const repository = await createRepository(root);
+	const connection = { serverUrl: discovery.url, token: discovery.token, appSessionId: "source-integration", sourceAccessMode: "api-only" } as const;
+	const client = new ReviewApiClient(connection);
+	const registered = await client.post<{ id: string }>("/repositories", { path: repository.directory });
+	const created = await client.post<{ reviewId: string }>("/commands", {
+		commandId: randomUUID(),
+		operation: {
+			type: "create",
+			title: "Source route integration",
+			target: { kind: "worktree", repositoryId: registered.id, base: repository.base },
+		},
+	});
+	const target = {
+		view: { reviewId: created.reviewId, version: 0 },
+		side: "head" as const,
+		file: "example.ts",
+	};
+	const resource = apiSourceUri(target);
+	const requests: URL[] = [];
+	const realFetch = globalThis.fetch;
+	t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
+		requests.push(new URL(typeof input === "string" || input instanceof URL ? input : input.url));
+		return realFetch(input, init);
+	});
+	const apiWindows: Array<{ openables: IWindowOpenable[]; options: IOpenWindowOptions }> = [];
+	const apiTabs = new ReviewCanvasEditorTabsService(
+		{} as never,
+		{ onDidCloseEditor: Event.None } as never,
+		{} as never,
+		{ getConnection: async () => connection } as never,
+		{ openWindow: async (openables: IWindowOpenable[], options: IOpenWindowOptions) => { apiWindows.push({ openables, options }); } } as never,
+		{ warn() {} } as never,
+	);
+	t.after(() => apiTabs.dispose());
+	assert.equal(await apiTabs.openSourceEditor({ resource }), false);
+	assert.equal(apiWindows.length, 0);
+	assert.equal(requests.some(request => request.pathname.endsWith("/navigator")), false);
+
+	let provider: ITextModelContentProvider | undefined;
+	const opened: Array<{ resource: URI; options?: { selection?: unknown } }> = [];
+	const models = new Map<string, { uri: URI; text: string; languageId: string; getLineCount(): number }>();
+	const apiSources = new ReviewApiSourceService(
+		{ getConnection: async () => connection } as never,
+		{
+			registerTextModelContentProvider(scheme: string, candidate: ITextModelContentProvider) {
+				if (scheme === "review-api-source") provider = candidate;
+				return { dispose() {} };
+			},
+		} as never,
+		{
+			getModel: (uri: URI) => models.get(uri.toString()),
+			createModel: (text: string, language: { languageId: string }, uri: URI) => {
+				const model = { uri, text, languageId: language.languageId, getLineCount: () => text.split("\n").length };
+				models.set(uri.toString(), model);
+				return model;
+			},
+		} as never,
+		{ createByFilepathOrFirstLine: (uri: URI) => ({ languageId: uri.path.endsWith(".ts") ? "typescript" : "plaintext" }) } as never,
+		{ openEditor: async (input: { resource: URI; options?: { selection?: unknown } }) => { opened.push(input); return { input: { resource: input.resource } }; } } as never,
+		apiTabs,
+		{ watch() { throw new Error("API-only source attempted to watch a server path"); }, onDidFilesChange: Event.None } as never,
+	);
+	t.after(() => apiSources.dispose());
+	await apiSources.open(target, { startLine: 1, startColumn: 8, endLine: 1, endColumn: 13 });
+	assert.equal(opened[0]!.resource.toString(), resource.toString());
+	assert.deepEqual(opened[0]!.options?.selection, { startLineNumber: 1, startColumn: 8, endLineNumber: 1, endColumn: 13 });
+	const model = await provider!.provideTextContent(opened[0]!.resource) as unknown as { text: string; languageId: string };
+	assert.equal(model.text, "export const value = 2;\n");
+	assert.equal(model.languageId, "typescript");
+	const fileRequest = requests.find(request => request.pathname.endsWith(`/${created.reviewId}/file`));
+	assert.equal(fileRequest?.searchParams.get("version"), "0");
+	assert.equal(fileRequest?.searchParams.has("commit"), false);
+	assert.equal(fileRequest?.searchParams.get("side"), "head");
+	assert.equal(fileRequest?.searchParams.get("file"), "example.ts");
+
+	requests.length = 0;
+	const sharedWindows: Array<{ openables: IWindowOpenable[]; options: IOpenWindowOptions }> = [];
+	const sharedTabs = new ReviewCanvasEditorTabsService(
+		{} as never,
+		{ onDidCloseEditor: Event.None } as never,
+		{} as never,
+		{ getConnection: async () => ({ ...connection, sourceAccessMode: "shared-filesystem" }) } as never,
+		{ openWindow: async (openables: IWindowOpenable[], options: IOpenWindowOptions) => { sharedWindows.push({ openables, options }); } } as never,
+		{ warn() {} } as never,
+	);
+	t.after(() => sharedTabs.dispose());
+	assert.equal(await sharedTabs.openSourceEditor({ resource }), true);
+	assert.equal(requests.some(request => request.pathname.endsWith(`/${created.reviewId}/navigator`)), true);
+	assert.equal(sharedWindows.length, 1);
+	const [workspace, file] = sharedWindows[0]!.openables;
+	assert.ok(workspace && "workspaceUri" in workspace);
+	assert.ok(file && "fileUri" in file);
+	assert.equal(workspace.workspaceUri.scheme, "file");
+	assert.equal(file.fileUri.scheme, "file");
+	assert.deepEqual(sharedWindows[0]!.options, { forceNewWindow: true, gotoLineMode: true, diffMode: false });
 });

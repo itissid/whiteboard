@@ -117,7 +117,9 @@ export type ReviewInlineEditorHeightMode = "capped" | "content";
 
 export interface ReviewInlineEditorRange {
   startLine: number;
+  startColumn?: number;
   endLine: number;
+  endColumn?: number;
   side?: ReviewDiffSide;
 }
 
@@ -1144,7 +1146,9 @@ const revealArgsSchema = z
   .strictObject({
     path: requiredString,
     startLine: positiveInteger,
+    startColumn: positiveInteger.optional(),
     endLine: positiveInteger,
+    endColumn: positiveInteger.optional(),
     side: reviewDiffSideSchema.optional(),
     pins: z
       .strictObject({

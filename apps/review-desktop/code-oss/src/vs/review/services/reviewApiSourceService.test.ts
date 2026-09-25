@@ -2,6 +2,7 @@ import { sourceLocation, sourceTreeUri, sourceTreeRoot } from "../common/reviewS
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { Event } from "../../base/common/event.js";
 import { URI } from "../../base/common/uri.js";
 import type { ITextModelContentProvider } from "../../editor/common/services/resolverService.js";
 import { apiSourceUri, ReviewApiSourceService } from "./reviewApiSourceService.js";
@@ -11,16 +12,22 @@ import type { ReviewDiffLens } from "../common/reviewProtocol.js";
 
 const view = (version: number) => resolveReviewSourceView({ reviewId: "review-a", version, pins: {} });
 
-function setup() {
+function setup(sourceAccessMode: "shared-filesystem" | "api-only" = "shared-filesystem") {
 	let provider: ITextModelContentProvider;
 	let disposed = 0;
+	let watched = 0;
+	const languageSelections: Array<{ resource: URI; firstLine?: string }> = [];
 	const models = new Map<string, { uri: URI; text: string; getLineCount(): number }>();
 	const opened: Array<{ original: { resource: URI }; modified: { resource: URI } }> = [];
+	const sources: Array<{
+		resource: URI;
+		options?: { pinned?: boolean; selection?: { startLineNumber: number; startColumn: number; endLineNumber: number; endColumn: number } };
+	}> = [];
 	const editor = { resource: URI.parse("review-api-source://review-a/file") };
 	const registered: string[] = [];
 	const service = new ReviewApiSourceService(
 		{
-			getConnection: async () => ({ serverUrl: "http://localhost:5570", token: "secret" }),
+			getConnection: async () => ({ serverUrl: "http://localhost:5570", token: "secret", sourceAccessMode }),
 		} as never,
 		{
 			registerTextModelContentProvider: (scheme: string, value: ITextModelContentProvider) => {
@@ -40,10 +47,16 @@ function setup() {
 				return model;
 			},
 		} as never,
-		{ createByFilepathOrFirstLine: () => ({ languageId: "typescript" }) } as never,
 		{
-			openEditor: async (input: (typeof opened)[number]) => {
-				opened.push(input);
+			createByFilepathOrFirstLine: (resource: URI, firstLine?: string) => {
+				languageSelections.push({ resource, firstLine });
+				return { languageId: resource.path.endsWith(".ts") ? "typescript" : "plaintext" };
+			},
+		} as never,
+		{
+			openEditor: async (input: (typeof opened)[number] | (typeof sources)[number]) => {
+				if ("resource" in input) sources.push(input);
+				else opened.push(input);
 				return { input: editor };
 			},
 		} as never,
@@ -52,14 +65,20 @@ function setup() {
 				registered.push(reviewId);
 			},
 		} as never,
-		{} as never,
+		{
+			watch() { watched += 1; return { dispose() {} }; },
+			onDidFilesChange: Event.None,
+		} as never,
 	);
 	return {
 		service,
 		models,
 		opened,
+		sources,
 		registered,
 		disposed: () => disposed,
+		watched: () => watched,
+		languageSelections,
 		readModel: (uri: URI) => provider.provideTextContent(uri),
 	};
 }
@@ -137,6 +156,15 @@ test("diff entries keep rename paths and missing sides, even when the review adv
 	}
 });
 
+test("API-only source loading never follows a server filesystem path", async (t) => {
+	const { service, readModel, watched } = setup("api-only");
+	t.after(() => service.dispose());
+	t.mock.method(globalThis, "fetch", async () => Response.json({ text: "remote source", localPath: "/linux-only/repository/source.ts" }));
+	const model = await readModel(apiSourceUri({ view: view(0), side: "head", file: "source.ts" }));
+	assert.equal((model as unknown as { text: string }).text, "remote source");
+	assert.equal(watched(), 0);
+});
+
 test("unavailable pinned files report the API error instead of falling back to disk", async (t) => {
 	const { service, readModel } = setup();
 	t.after(() => service.dispose());
@@ -165,6 +193,42 @@ test("tree entries retain version, side and selected commit when opening a child
 	assert.equal(file!.resource.query, root.query);
 	assert.equal(file!.readonly, true);
 	assert.equal(folder!.isDirectory, true);
+});
+
+test("several API Source Editors keep distinct full-file models and language identities", async (t) => {
+	const { service, sources, registered, readModel, languageSelections } = setup("api-only");
+	t.after(() => service.dispose());
+	t.mock.method(globalThis, "fetch", async (value: string) => {
+		const file = new URL(value).searchParams.get("file");
+		return Response.json({ text: file === "src/first.ts" ? "export const first = 1;\nsecond line\n" : "# Notes\nmore\n" });
+	});
+	await service.open({ view: view(3), side: "head", file: "src/first.ts" });
+	await service.open({ view: view(3), side: "head", file: "docs/second.md" });
+	assert.notEqual(sources[0]!.resource.toString(), sources[1]!.resource.toString());
+	assert.deepEqual(registered, ["review-a", "review-a"]);
+	const models = await Promise.all(sources.map(source => readModel(source.resource)));
+	assert.deepEqual(models.map(model => (model as unknown as { text: string }).text), [
+		"export const first = 1;\nsecond line\n",
+		"# Notes\nmore\n",
+	]);
+	assert.deepEqual(languageSelections.map(({ resource, firstLine }) => [resource.path, firstLine]), [
+		["/src/first.ts", "export const first = 1;"],
+		["/docs/second.md", "# Notes"],
+	]);
+});
+
+test("opening API source reveals the requested line and column selection", async (t) => {
+	const { service, sources } = setup("api-only");
+	t.after(() => service.dispose());
+	await service.open(
+		{ view: view(3), side: "head", file: "src/source.ts" },
+		{ startLine: 4, startColumn: 6, endLine: 5, endColumn: 11 },
+	);
+	assert.equal(sources[0]!.resource.scheme, "review-api-source");
+	assert.deepEqual(sources[0]!.options, {
+		pinned: true,
+		selection: { startLineNumber: 4, startColumn: 6, endLineNumber: 5, endColumn: 11 },
+	});
 });
 
 test("opening a native diff preserves renames and empty sides at the selected version", async (t) => {
