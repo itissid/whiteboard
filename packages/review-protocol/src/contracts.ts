@@ -646,6 +646,17 @@ export type ReviewCanvasContent =
   | {
       kind: "error";
       message: string;
+      connection?: {
+        profileName: string;
+        reason:
+          | "unreachable"
+          | "rejected-token"
+          | "missing-token"
+          | "incompatible";
+        retry(): void | Promise<void>;
+        editCredentials(): void | Promise<void>;
+        switchProfile(): void | Promise<void>;
+      };
     }
   // The Source tab: an empty state beside the read-only file tree. Static —
   // the tree and the file tabs it opens are native surfaces. `error` is set

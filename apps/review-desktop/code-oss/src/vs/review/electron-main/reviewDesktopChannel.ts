@@ -34,6 +34,10 @@ export class ReviewDesktopChannel implements IServerChannel {
       await this.host.activateRemoteProfile();
       return undefined as T;
     }
+    if (command === "activateEmbeddedConnection") {
+      this.host.activateEmbeddedConnection();
+      return undefined as T;
+    }
     if (command === "stageRustAnalyzer") {
       this.host.stageRustAnalyzer();
       return undefined as T;

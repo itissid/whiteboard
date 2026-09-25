@@ -31,6 +31,21 @@ test("selecting a remote profile stops the embedded server without requesting it
   assert.equal(embeddedConnectionRequests, 0);
 });
 
+test("explicitly returning from the last remote profile re-enables the embedded server", async () => {
+  let embeddedActivations = 0;
+  const channel = new ReviewDesktopChannel({
+    appSessionId: "app-session",
+    activateEmbeddedConnection() {
+      embeddedActivations += 1;
+      return Promise.resolve();
+    },
+  } as never);
+
+  await channel.call("test", "activateEmbeddedConnection");
+
+  assert.equal(embeddedActivations, 1);
+});
+
 test("the default connection starts through the embedded server host", async () => {
   const connection = { url: "http://127.0.0.1:5000" };
   let requests = 0;

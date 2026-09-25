@@ -770,6 +770,29 @@ button {
   background: var(--accent);
 }
 
+.review-connection-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 20px;
+}
+
+.review-connection-actions button {
+  padding: 8px 13px;
+  border: 1px solid var(--rule);
+  border-radius: 5px;
+  color: var(--ink);
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+
+.review-connection-actions .review-shell-primary {
+  border-color: transparent;
+  color: var(--on-accent);
+  background: var(--accent);
+}
+
 /* Layout-neutral wrapper that carries the theme class inside the compiled
    scope boundary; the scope root element is only matched by :scope. */
 .review-theme-host {
