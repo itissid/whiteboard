@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -7,6 +7,7 @@ import { PassThrough } from "node:stream";
 
 import sharp from "sharp";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import WebSocket from "ws";
 import { z } from "zod";
 
 import { runReviewCli } from "../cli-runner.js";
@@ -76,6 +77,114 @@ async function start(
   const client = await connectReviewApi(env);
 
   return { client, discovery, env, stateDir, stop };
+}
+
+async function startCli(
+  token: string | undefined,
+  stateDir = path.join(root, "server"),
+) {
+  const env = { ...process.env };
+
+  delete env.DEV_REVIEW_SERVER_TOKEN;
+
+  if (token !== undefined) env.DEV_REVIEW_SERVER_TOKEN = token;
+
+  const child = spawn(
+    process.execPath,
+    [
+      "--import=tsx",
+      path.resolve(import.meta.dirname, "../cli.ts"),
+      "--state-dir",
+      stateDir,
+      "server",
+      "start",
+      "--json",
+    ],
+    {
+      env: {
+        ...env,
+        DEV_FAST_REVIEW_TELEMETRY_DISABLED: "1",
+      },
+    },
+  );
+
+  const ready = Promise.withResolvers<void>();
+  let output = "";
+  let outputBuffer = "";
+  let errors = "";
+
+  child.stdout.setEncoding("utf8");
+  child.stdout.on("data", (chunk: string) => {
+    output += chunk;
+    outputBuffer += chunk;
+    let end: number;
+
+    while ((end = outputBuffer.indexOf("\n")) >= 0) {
+      const line = outputBuffer.slice(0, end);
+      outputBuffer = outputBuffer.slice(end + 1);
+
+      if (line && JSON.parse(line).event === "server.ready") ready.resolve();
+    }
+  });
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk: string) => {
+    errors += chunk;
+  });
+
+  const exited = new Promise<void>((resolve) => {
+    child.once("close", () => resolve());
+  });
+
+  child.once("error", ready.reject);
+  child.once("exit", (code) => {
+    ready.reject(new Error(`Server exited before readiness with code ${code}`));
+  });
+
+  await ready.promise;
+  const discovery = await readReviewServerDiscovery(stateDir);
+
+  if (!discovery) throw new Error("Server became ready without discovery");
+
+  const stop = async () => {
+    if (child.exitCode === null) child.kill("SIGTERM");
+    await exited;
+  };
+
+  stops.push(stop);
+
+  return {
+    discovery,
+    errors: () => errors,
+    output: () => output,
+    stateDir,
+    stop,
+  };
+}
+
+async function webSocketAuthenticationStatus(
+  serverUrl: string,
+  token: string,
+): Promise<number> {
+  const url = new URL(
+    `/health/websocket?token=${encodeURIComponent(token)}`,
+    serverUrl,
+  );
+
+  url.protocol = "ws:";
+
+  return new Promise((resolve, reject) => {
+    const webSocket = new WebSocket(url);
+
+    webSocket.once("open", () => {
+      webSocket.close();
+      resolve(101);
+    });
+    webSocket.once("unexpected-response", (_request, response) => {
+      response.resume();
+      resolve(response.statusCode ?? 0);
+    });
+    webSocket.once("error", reject);
+  });
 }
 
 async function repository() {
@@ -526,6 +635,96 @@ it("authors through CLI and MCP without Desktop and retains source, unfinished s
   } finally {
     await mcp.close();
   }
+});
+
+it("keeps a configured credential valid across CLI server restarts", async () => {
+  const token = "restart-stable-token";
+  const first = await startCli(token);
+
+  expect(
+    (
+      await fetch(`${first.discovery.url}/health`, {
+        headers: { "x-review-token": token },
+      })
+    ).status,
+  ).toBe(200);
+  expect(first.output()).not.toContain(token);
+  expect(first.errors()).not.toContain(token);
+  await first.stop();
+
+  const restarted = await startCli(token, first.stateDir);
+  expect(
+    await webSocketAuthenticationStatus(restarted.discovery.url, token),
+  ).toBe(101);
+  expect(
+    (
+      await fetch(`${restarted.discovery.url}/health`, {
+        headers: { "x-review-token": "invalid-token" },
+      })
+    ).status,
+  ).toBe(401);
+  expect(restarted.output()).not.toContain(token);
+  expect(restarted.errors()).not.toContain(token);
+});
+
+it("rotates a configured credential when the CLI configuration changes", async () => {
+  const oldToken = "old-stable-token";
+  const first = await startCli(oldToken);
+  await first.stop();
+
+  const replacementToken = "replacement-stable-token";
+  const rotated = await startCli(replacementToken, first.stateDir);
+
+  expect(
+    (
+      await fetch(`${rotated.discovery.url}/health`, {
+        headers: { "x-review-token": oldToken },
+      })
+    ).status,
+  ).toBe(401);
+  expect(
+    (
+      await fetch(`${rotated.discovery.url}/health`, {
+        headers: { "x-review-token": replacementToken },
+      })
+    ).status,
+  ).toBe(200);
+  expect(
+    await webSocketAuthenticationStatus(rotated.discovery.url, oldToken),
+  ).toBe(401);
+  expect(
+    await webSocketAuthenticationStatus(
+      rotated.discovery.url,
+      replacementToken,
+    ),
+  ).toBe(101);
+  expect(rotated.output()).not.toContain(oldToken);
+  expect(rotated.output()).not.toContain(replacementToken);
+  expect(rotated.errors()).not.toContain(oldToken);
+  expect(rotated.errors()).not.toContain(replacementToken);
+});
+
+it("continues to generate process-scoped credentials without configuration", async () => {
+  const first = await startCli(undefined);
+  const oldToken = first.discovery.token;
+  await first.stop();
+
+  const restarted = await startCli(undefined, first.stateDir);
+  expect(restarted.discovery.token).not.toBe(oldToken);
+  expect(
+    (
+      await fetch(`${restarted.discovery.url}/health`, {
+        headers: { "x-review-token": oldToken },
+      })
+    ).status,
+  ).toBe(401);
+  expect(
+    (
+      await fetch(`${restarted.discovery.url}/health`, {
+        headers: { "x-review-token": restarted.discovery.token },
+      })
+    ).status,
+  ).toBe(200);
 });
 
 it("authenticates clients, reports capabilities and readiness without exposing the token, and diagnoses unavailable commits", async () => {
