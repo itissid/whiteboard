@@ -55,13 +55,24 @@ configurationRegistry.registerConfiguration({
 		[REVIEW_SERVER_PROFILE_SETTING]: {
 			type: ['object', 'null'],
 			default: null,
-			description: localize('review.serverConnectionProfile', "The active Review Server Connection Profile. Its token is stored separately in OS-backed secret storage."),
+			description: localize('review.serverConnectionProfile', "Saved Review Server Connection Profiles and the active profile identifier. Tokens are stored separately in OS-backed secret storage."),
 			additionalProperties: false,
 			properties: {
-				id: { type: 'string' },
-				name: { type: 'string' },
-				serverUrl: { type: 'string' },
-				sourceAccessMode: { type: 'string', enum: ['api-only'] },
+				version: { type: 'number', enum: [1] },
+				activeProfileId: { type: 'string' },
+				profiles: {
+					type: 'array',
+					items: {
+						type: 'object',
+						additionalProperties: false,
+						properties: {
+							id: { type: 'string' },
+							name: { type: 'string' },
+							serverUrl: { type: 'string' },
+							sourceAccessMode: { type: 'string', enum: ['api-only'] },
+						},
+					},
+				},
 			},
 		},
 	},

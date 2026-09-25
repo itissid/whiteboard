@@ -202,6 +202,13 @@ export class ReviewDesktopHost extends Disposable {
   async activateRemoteProfile(): Promise<void> {
     this.remoteProfileActive = true;
     await this.supervisor.stop();
+    this.embeddedConnectionRequested = false;
+  }
+
+  /** Re-enables the default owner only after the reviewer removes the last remote profile. */
+  activateEmbeddedConnection(): void {
+    this.remoteProfileActive = false;
+    this.embeddedConnectionRequested = false;
   }
 
   stageRustAnalyzer(): void {

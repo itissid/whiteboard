@@ -38,7 +38,7 @@ async function createRepository(root: string) {
 	return { directory, base, head: git("rev-parse", "HEAD") };
 }
 
-test("a saved API-only profile uses a real headless server for review and authoring flows", async (t) => {
+test("a saved API-only profile retries real authentication without embedded fallback before review and authoring flows", async (t) => {
 	// Runtime-only import keeps the Code OSS compiler rooted in its own tree while
 	// this integration test exercises the workspace's real headless host.
 	const headlessHostUrl = new URL("../../../../../../../packages/review/src/server/headless-host.ts", import.meta.url).href;
@@ -86,18 +86,30 @@ test("a saved API-only profile uses a real headless server for review and author
 			};
 		},
 	};
+	let savedToken = "rejected-token";
 	const service = new ReviewDesktopConnectionService(
 		mainProcessService as never,
 		new TestStorage() as never,
-		{ getValue: (key: string) => key === REVIEW_SERVER_PROFILE_SETTING ? profile : undefined } as never,
-		{ get: (key: string) => Promise.resolve(key === reviewServerProfileTokenKey(profile.id) ? discovery.token : undefined) } as never,
+		{
+			getValue: (key: string) => key === REVIEW_SERVER_PROFILE_SETTING
+				? { version: 1, activeProfileId: profile.id, profiles: [profile] }
+				: undefined,
+		} as never,
+		{ get: (key: string) => Promise.resolve(key === reviewServerProfileTokenKey(profile.id) ? savedToken : undefined) } as never,
 	);
 	t.after(() => service.dispose());
 
+	await assert.rejects(service.getConnection(), /rejected the token/);
+	const disconnected = service.getConnectionState();
+	assert.equal(disconnected.status, "disconnected");
+	assert.equal(disconnected.status === "disconnected" && disconnected.reason, "rejected-token");
+	assert.equal(embeddedRequests, 0);
+	savedToken = discovery.token;
+	assert.equal((await service.retryRemoteProfile()).status, "connected");
 	const connection = await service.getConnection();
 	assert.equal(connection.serverUrl, discovery.url);
 	assert.equal(connection.sourceAccessMode, "api-only");
-	assert.equal(remoteActivations, 1);
+	assert.equal(remoteActivations, 2);
 	assert.equal(embeddedRequests, 0);
 
 	const repository = await createRepository(root);

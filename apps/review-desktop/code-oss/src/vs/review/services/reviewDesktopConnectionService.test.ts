@@ -256,21 +256,29 @@ test("creates an API-only loopback profile with metadata and token in separate s
 		token: "saved-token",
 	});
 
-	const metadata = settings.get(REVIEW_SERVER_PROFILE_SETTING) as Record<string, unknown>;
+	const metadata = settings.get(REVIEW_SERVER_PROFILE_SETTING) as {
+		version: number;
+		activeProfileId: string;
+		profiles: Array<Record<string, unknown>>;
+	};
 	assert.deepEqual(metadata, {
-		id: metadata.id,
-		name: "Forwarded devbox",
-		serverUrl: "http://127.0.0.1:5500",
-		sourceAccessMode: "api-only",
+		version: 1,
+		activeProfileId: metadata.profiles[0]!.id,
+		profiles: [{
+			id: metadata.profiles[0]!.id,
+			name: "Forwarded devbox",
+			serverUrl: "http://127.0.0.1:5500",
+			sourceAccessMode: "api-only",
+		}],
 	});
-	assert.equal(typeof metadata.id, "string");
+	assert.equal(typeof metadata.activeProfileId, "string");
 	assert.equal(JSON.stringify(metadata).includes("saved-token"), false);
 	assert.deepEqual([...secrets.values()], ["saved-token"]);
 	assert.deepEqual(requests, [
 		"http://127.0.0.1:5500/health",
 		"http://127.0.0.1:5500/reviews-api/capabilities",
 	]);
-	assert.deepEqual(calls.map(({ command }) => command), ["getAppSessionId", "activateRemoteProfile"]);
+	assert.deepEqual(calls.map(({ command }) => command), ["activateRemoteProfile", "getAppSessionId"]);
 	assert.deepEqual(await service.getConnection(), {
 		serverUrl: "http://127.0.0.1:5500",
 		token: "saved-token",
@@ -334,7 +342,7 @@ test("invalid, unreachable, and incompatible remote profiles never fall back to 
 			t.after(() => service.dispose());
 			await assert.rejects(service.getConnection(), scenario.error);
 			assert.equal(embeddedRequests, 0);
-			assert.equal(remoteActivations, 0);
+			assert.equal(remoteActivations, 1);
 		});
 	}
 });

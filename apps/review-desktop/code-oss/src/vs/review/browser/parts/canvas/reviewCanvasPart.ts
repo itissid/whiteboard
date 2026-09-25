@@ -71,6 +71,11 @@ import {
 	REVIEW_TUTORIAL_PROGRESS_STORAGE_KEY,
 	REVIEW_TUTORIAL_STEP_IDS
 } from "../../../common/reviewProtocol.js";
+import {
+	REVIEW_EDIT_ACTIVE_PROFILE_COMMAND,
+	REVIEW_RETRY_PROFILE_COMMAND,
+	REVIEW_SWITCH_PROFILE_COMMAND,
+} from "../../../contrib/connection/reviewServerProfile.contribution.js";
 import { IReviewVerbsService } from "../../../contrib/verbs/reviewVerbs.js";
 import { ReviewTooltip } from "../../reviewTooltip.js";
 import { IReviewApiCatalogService } from "../../../services/reviewApiCatalogService.js";
@@ -232,6 +237,10 @@ export class ReviewCanvasEditorPane extends EditorPane {
 			}),
 		);
 		this._register(desktopConnection.onDidFail((error) => void this.renderFailure(error)));
+		this._register(desktopConnection.onDidChangeConnectionState((state) => {
+			if (state.status === "connecting") void this.renderConnecting();
+			if (state.status === "disconnected") void this.renderFailure(new Error(state.message));
+		}));
 		this._register(
 			configurationService.onDidChangeConfiguration((event) => {
 				if (
@@ -944,6 +953,15 @@ export class ReviewCanvasEditorPane extends EditorPane {
 		);
 	}
 
+	private async renderConnecting(): Promise<void> {
+		this.refreshProgress.stop();
+		const generation = ++this.loadGeneration;
+		if (await this.resetCanvasForGeneration(generation)) {
+			this.setCanvasState("connecting");
+			await this.render({ kind: "loading" }, generation);
+		}
+	}
+
 	private async renderFailure(error: Error): Promise<void> {
 		this.refreshProgress.stop();
 		const generation = ++this.loadGeneration;
@@ -955,10 +973,20 @@ export class ReviewCanvasEditorPane extends EditorPane {
 	private async renderError(error: unknown, generation?: number): Promise<void> {
 		const activeGeneration = generation ?? ++this.loadGeneration;
 		this.setCanvasState("error");
+		const connectionState = this.desktopConnection.getConnectionState();
 		await this.render(
 			{
 				kind: "error",
 				message: error instanceof Error ? error.message : String(error),
+				...(connectionState.status === "disconnected" ? {
+					connection: {
+						profileName: connectionState.profile.name,
+						reason: connectionState.reason,
+						retry: () => this.commandService.executeCommand(REVIEW_RETRY_PROFILE_COMMAND),
+						editCredentials: () => this.commandService.executeCommand(REVIEW_EDIT_ACTIVE_PROFILE_COMMAND),
+						switchProfile: () => this.commandService.executeCommand(REVIEW_SWITCH_PROFILE_COMMAND),
+					},
+				} : {}),
 			},
 			activeGeneration,
 		);

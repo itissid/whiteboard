@@ -71,9 +71,39 @@ function ReviewCanvas({
   }
 
   if (content.kind === "error") {
+    const connection = content.connection;
+
     return (
-      <CanvasShell title="Session unavailable">
+      <CanvasShell
+        title={
+          connection ? "Review Server disconnected" : "Session unavailable"
+        }
+      >
+        {connection ? <h2>{connection.profileName}</h2> : null}
         <p>{content.message}</p>
+        {connection ? (
+          <div className="review-connection-actions">
+            <button
+              className="review-shell-primary"
+              type="button"
+              onClick={() => void connection.retry()}
+            >
+              Retry
+            </button>
+            <button
+              type="button"
+              onClick={() => void connection.editCredentials()}
+            >
+              Edit credentials
+            </button>
+            <button
+              type="button"
+              onClick={() => void connection.switchProfile()}
+            >
+              Switch profile
+            </button>
+          </div>
+        ) : null}
       </CanvasShell>
     );
   }
