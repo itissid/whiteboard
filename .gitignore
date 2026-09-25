@@ -94,3 +94,6 @@ scripts/acceptance/evidence/
 packages/review/tutorial/pins.json
 packages/review/bin/
 thoughts/
+
+# Claude Code local settings
+.claude/settings.local.json

@@ -12,6 +12,7 @@ import {
 REVIEW_DESKTOP_CHANNEL,
 REVIEW_DESKTOP_CONNECTION_VERSION,
 type ReviewDesktopConnection,
+type ReviewSourceAccessMode,
 } from "../common/reviewDesktopBootstrap.js";
 import { consumeReviewEventStream } from "../common/reviewEventStream.js";
 import {
@@ -38,6 +39,8 @@ export interface ReviewServerConnection {
 	readonly token: string;
 	/** The launch's id, minted by the main process; canvas telemetry carries it. */
 	readonly appSessionId: string;
+	/** Whether server filesystem paths are addressable by this Desktop. */
+	readonly sourceAccessMode: ReviewSourceAccessMode;
 }
 
 
@@ -147,8 +150,8 @@ export class ReviewDesktopConnectionService extends Disposable implements IRevie
 
 	async getConnection(): Promise<ReviewServerConnection> {
 		await this.initialize();
-		const { token, appSessionId } = this.requireConnection();
-		return { serverUrl: this.serverUrl, token, appSessionId };
+		const { token, appSessionId, sourceAccessMode } = this.requireConnection();
+		return { serverUrl: this.serverUrl, token, appSessionId, sourceAccessMode };
 	}
 
 	/**

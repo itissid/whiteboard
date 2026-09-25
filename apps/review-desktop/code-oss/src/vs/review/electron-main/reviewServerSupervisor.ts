@@ -324,6 +324,7 @@ export class ReviewServerSupervisor extends Disposable {
         const connection: ReviewDesktopConnection = {
           ...announced,
           appSessionId: this.appSessionId,
+          sourceAccessMode: "shared-filesystem",
         };
         ready = true;
         this.port = Number(new URL(connection.url).port);

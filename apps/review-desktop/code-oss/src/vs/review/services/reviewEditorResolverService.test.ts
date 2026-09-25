@@ -11,7 +11,7 @@ import { REVIEW_LANGUAGE_SOURCE_SCHEME } from "../common/reviewReadonlySource.js
 import { ReviewCanvasEditorTabsService } from "./reviewCanvasEditorTabsService.js";
 import { ReviewEditorResolverService } from "./reviewEditorResolverService.js";
 
-test("source tree, selected code, definitions and diffs hand off before creating a Review editor group", async (t) => {
+test("source tree, selected code, definitions and diffs hand off to Native Source Workspaces", async (t) => {
 	const requests: URL[] = [];
 	const windows: { openables: IWindowOpenable[]; options: IOpenWindowOptions }[] = [];
 	let fail = false;
@@ -25,12 +25,12 @@ test("source tree, selected code, definitions and diffs hand off before creating
 	});
 	const tabs = new ReviewCanvasEditorTabsService(
 		{} as never, { onDidCloseEditor: Event.None } as never, {} as never,
-		{ async getConnection() { return { serverUrl: "http://localhost", token: "test" }; } } as never,
+		{ async getConnection() { return { serverUrl: "http://localhost", token: "test", sourceAccessMode: "shared-filesystem" }; } } as never,
 		{ async openWindow(openables: IWindowOpenable[], options: IOpenWindowOptions) { windows.push({ openables, options }); } } as never,
 		{ warn() {} } as never,
 	);
 	const resolver = new ReviewEditorResolverService(
-		{ get activeGroup() { throw new Error("Review must not create an editor group"); } } as never,
+		{} as never,
 		{ invokeFunction: (fn: (accessor: unknown) => unknown) => fn({ get: () => tabs }) } as never,
 		{} as never, {} as never, {} as never,
 		{ get: () => "[]", remove() {}, onWillSaveState: Event.None } as never,
@@ -72,4 +72,31 @@ test("source tree, selected code, definitions and diffs hand off before creating
 	const settings = { resource: URI.parse("vscode-settings:/settings") };
 	assert.equal(await resolver.resolveEditor(settings, undefined), ResolvedStatus.NONE);
 	assert.equal(stock.mock.calls[0].arguments[0], settings);
+});
+
+test("API-only source requests stay out of Native Source Workspaces", async (t) => {
+	let requests = 0;
+	let windows = 0;
+	t.mock.method(globalThis, "fetch", async () => {
+		requests += 1;
+		return Response.json({ workspacePath: "/remote/review.code-workspace", filePath: "/remote/source.ts" });
+	});
+	const tabs = new ReviewCanvasEditorTabsService(
+		{} as never, { onDidCloseEditor: Event.None } as never, {} as never,
+		{ async getConnection() { return { serverUrl: "http://127.0.0.1:5000", token: "test", sourceAccessMode: "api-only" }; } } as never,
+		{ async openWindow() { windows += 1; } } as never,
+		{ warn() {} } as never,
+	);
+	t.after(() => tabs.dispose());
+	const view = { reviewId: "review-a", version: 7, pins: { repositoryId: "repository", head: "head-sha", base: "base-sha" } };
+	const source = apiSourceUri({ view, side: "head", file: "source.ts" });
+
+	assert.equal(await tabs.openSourceEditor({ resource: source }), false);
+	assert.equal(await tabs.openSourceReferences(source, { lineNumber: 4, column: 2 }), false);
+	await assert.rejects(
+		tabs.openApiSource({ reviewId: "review-a", kind: "version", version: 7 }, "Remote Review"),
+		/Shared-filesystem Source Access Mode/,
+	);
+	assert.equal(requests, 0);
+	assert.equal(windows, 0);
 });

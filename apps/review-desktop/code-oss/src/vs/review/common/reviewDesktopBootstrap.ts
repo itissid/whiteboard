@@ -17,6 +17,8 @@ export const REVIEW_DESKTOP_CONNECTION_VERSION = 3;
 /** Main-process IPC channel the renderer asks for that endpoint on. */
 export const REVIEW_DESKTOP_CHANNEL = "review";
 
+export type ReviewSourceAccessMode = "shared-filesystem" | "api-only";
+
 export interface ReviewDesktopConnection {
   readonly version: number;
   readonly url: string;
@@ -27,10 +29,12 @@ export interface ReviewDesktopConnection {
   readonly cliVersion?: string;
   /** Minted once per launch by the main process, never announced by the server. */
   readonly appSessionId: string;
+  /** Declared by Desktop; never inferred from the server URL. */
+  readonly sourceAccessMode: ReviewSourceAccessMode;
 }
 
 /** What the server's ready event announces, before main adds its own fields. */
-export type ReviewServerAnnouncement = Omit<ReviewDesktopConnection, "appSessionId">;
+export type ReviewServerAnnouncement = Omit<ReviewDesktopConnection, "appSessionId" | "sourceAccessMode">;
 
 export interface ReviewDesktopCredentials {
   readonly token: string;
