@@ -11,7 +11,15 @@ const discoverySchema = z.object({
   url: z.url().refine((value) => {
     const url = new URL(value);
 
-    return url.protocol === "http:" && url.hostname === "127.0.0.1";
+    return (
+      url.protocol === "http:" &&
+      !url.username &&
+      !url.password &&
+      url.pathname === "/" &&
+      !url.search &&
+      !url.hash &&
+      value === url.origin
+    );
   }),
   serverPid: z.number().int().positive(),
   token: z.string().min(1),

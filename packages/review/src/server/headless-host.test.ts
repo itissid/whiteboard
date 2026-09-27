@@ -1,6 +1,8 @@
 import { execFileSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { once } from "node:events";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
@@ -82,8 +84,9 @@ async function start(
 async function startCli(
   token: string | undefined,
   stateDir = path.join(root, "server"),
+  options: { args?: string[]; env?: NodeJS.ProcessEnv } = {},
 ) {
-  const env = { ...process.env };
+  const env = { ...process.env, ...options.env };
 
   delete env.DEV_REVIEW_SERVER_TOKEN;
 
@@ -98,6 +101,7 @@ async function startCli(
       stateDir,
       "server",
       "start",
+      ...(options.args ?? []),
       "--json",
     ],
     {
@@ -635,6 +639,57 @@ it("authors through CLI and MCP without Desktop and retains source, unfinished s
   } finally {
     await mcp.close();
   }
+});
+
+it("binds a configured host and publishes an explicit advertised origin", async () => {
+  const token = "container-network-token";
+  const stateDir = path.join(root, "container-network");
+  const portOwner = createServer();
+  portOwner.listen(0, "127.0.0.1");
+  await once(portOwner, "listening");
+  const port = z.object({ port: z.number() }).parse(portOwner.address()).port;
+  await new Promise<void>((resolve, reject) =>
+    portOwner.close((error) => (error ? reject(error) : resolve())),
+  );
+
+  const server = await startCli(token, stateDir, {
+    args: [
+      "--host",
+      "0.0.0.0",
+      "--port",
+      String(port),
+      "--advertise-url",
+      `http://whiteboard:${port}/`,
+    ],
+  });
+
+  expect(server.discovery.url).toBe(`http://whiteboard:${port}`);
+  expect(
+    (
+      await fetch(`http://127.0.0.1:${port}/health`, {
+        headers: { "x-review-token": token },
+      })
+    ).status,
+  ).toBe(200);
+});
+
+it("reads the configured credential from a Docker-style secret file", async () => {
+  const token = "secret-file-token";
+  const tokenFile = path.join(root, "review-server-token");
+  await writeFile(tokenFile, `${token}\n`, { mode: 0o600 });
+
+  const server = await startCli(undefined, path.join(root, "secret-file"), {
+    env: { DEV_REVIEW_SERVER_TOKEN_FILE: tokenFile },
+  });
+
+  expect(server.discovery.token).toBe(token);
+  expect(
+    (
+      await fetch(`${server.discovery.url}/health`, {
+        headers: { "x-review-token": token },
+      })
+    ).status,
+  ).toBe(200);
 });
 
 it("keeps a configured credential valid across CLI server restarts", async () => {

@@ -38,3 +38,21 @@ Ordinary Review document comments remain available through the remote Review Ser
 - Connection configuration must represent filesystem capability explicitly rather than infer it from hostname.
 - The implementation must support and test two source-opening paths.
 - True source-line comments require a separate domain and persistence design.
+
+## Technical Validation
+
+### 2026-09-25 — Mac Remote-SSH source handoff
+
+A Mac learning test validated the external-editor premise in decision 10. From the installed Whiteboard process environment, `code --remote ssh-remote+truenas-dev-2 --goto <linux-path>:<line>:<column>` opened the intended Linux source location through the existing Remote-SSH authority. Evidence: `thoughts/itissid/handoffs/whiteboard-mac-vscode-remote-handoff-result.md`.
+
+### 2026-09-27 — Dockerized headless-server CLI authentication
+
+A devbox learning test built commit `9a0fe2d0` into a Node 24 container, started the headless Review Server with a stable configured token and shared state directory, and exercised the real CLI from devbox. `server status`, `api tools`, and a non-mutating `api session_capabilities` call succeeded through persisted `review-server/server.json` discovery. An MCP SDK client then initialized `whiteboard mcp`, listed the same 28-tool catalog, and called `session_capabilities` successfully. Replacing only the discovery token with an invalid value caused the API call to fail; restoring it restored success.
+
+This validates the server-side persisted-token interoperability assumed by decision 3. It does not replace Desktop's OS-backed profile secret storage and does not yet validate Mac GUI connectivity through the transport. Full setup, commands, outputs, negative control, limitations, and cleanup are recorded in `thoughts/shared/research/2026-09-27-dockerized-headless-server-cli-auth-learning-test.md`.
+
+### 2026-09-27 — TrueNAS Compose deployment
+
+A production-shaped Compose service validated the container-specific seams that the earlier disposable test did not cover. The server bound `0.0.0.0:34125`, advertised `http://whiteboard:34125` on `devnet`, read its stable token from a mode-`0600` TrueNAS-backed file mounted read-only at `/run/secrets`, and published no host/LAN port. Devbox `server status`, JSON API, MCP initialization/tool calls, and Desktop-origin CORS preflight all passed through the advertised origin.
+
+The deployed container is healthy with `restart: unless-stopped`. A direct Docker restart, without rerunning the wrapper or resupplying the token, preserved authenticated health and devbox API access. Docker inspection verifies the host-restart policy, but the TrueNAS host itself was not rebooted. Full topology, positive and red results, persistence details, and remaining Mac GUI validation are recorded in `thoughts/shared/research/2026-09-27-truenas-compose-headless-deployment-validation.md`.

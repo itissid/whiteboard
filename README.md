@@ -78,6 +78,9 @@ We found it difficult to reason about what set of decisions our agents made auto
 Whiteboard is MIT-licensed and runs against your local checkouts. A hosted
 product for teams is planned, and everything will always remain self-hostable.
 
+For this fork's split Linux-server/macOS-Desktop setup, see the
+[TrueNAS headless deployment guide](deploy/whiteboard-headless/DEPLOYMENT.md).
+
 ## Known limitations
 
 - You cannot currently edit files in Whiteboard. If this is something that you find yourself wanting to do, please file an issue!

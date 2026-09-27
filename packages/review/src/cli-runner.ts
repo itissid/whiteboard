@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+import { isIP } from "node:net";
 import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import type { Writable } from "node:stream";
@@ -146,6 +148,69 @@ interface CliRunState {
   json: boolean;
 }
 
+function isLoopbackHost(host: string): boolean {
+  if (host.toLowerCase() === "localhost") return true;
+
+  const ipVersion = isIP(host);
+
+  if (ipVersion === 4) return host.startsWith("127.");
+
+  if (ipVersion !== 6) return false;
+
+  return new URL(`http://[${host}]`).hostname === "[::1]";
+}
+
+function reviewServerAdvertiseUrl(value: string): string {
+  let url: URL;
+
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error("--advertise-url must be an absolute HTTP origin.");
+  }
+
+  if (
+    url.protocol !== "http:" ||
+    url.username ||
+    url.password ||
+    url.pathname !== "/" ||
+    url.search ||
+    url.hash
+  )
+    throw new Error("--advertise-url must be an absolute HTTP origin.");
+
+  return url.origin;
+}
+
+async function configuredReviewServerToken(
+  env: NodeJS.ProcessEnv,
+): Promise<string | undefined> {
+  const environmentToken = env.DEV_REVIEW_SERVER_TOKEN?.trim();
+  const tokenFile = env.DEV_REVIEW_SERVER_TOKEN_FILE?.trim();
+
+  if (environmentToken && tokenFile)
+    throw new Error(
+      "Set only one of DEV_REVIEW_SERVER_TOKEN or DEV_REVIEW_SERVER_TOKEN_FILE.",
+    );
+
+  if (!tokenFile) return environmentToken || undefined;
+
+  let token: string;
+
+  try {
+    token = (await readFile(tokenFile, "utf8")).trim();
+  } catch {
+    throw new Error(
+      `Could not read DEV_REVIEW_SERVER_TOKEN_FILE ${JSON.stringify(tokenFile)}.`,
+    );
+  }
+
+  if (!token)
+    throw new Error("DEV_REVIEW_SERVER_TOKEN_FILE must contain a token.");
+
+  return token;
+}
+
 export async function runReviewCli(input: ReviewCliInput): Promise<number> {
   const env = input.env ?? process.env;
   const cwd = input.cwd ?? env.INIT_CWD ?? process.cwd();
@@ -257,9 +322,18 @@ export async function runReviewCli(input: ReviewCliInput): Promise<number> {
         "directory for saved reviews and server discovery",
       )
       .option(
+        "--host <host>",
+        "TCP bind host (non-loopback requires --advertise-url)",
+        "127.0.0.1",
+      )
+      .option(
         "--port <port>",
-        "loopback port (0 chooses an available port)",
+        "TCP port (0 chooses an available port)",
         "0",
+      )
+      .option(
+        "--advertise-url <url>",
+        "HTTP origin that clients use to reach this server",
       )
       .option(
         "--software-maps",
@@ -269,13 +343,15 @@ export async function runReviewCli(input: ReviewCliInput): Promise<number> {
       .addOption(new Option("--authoring-mode <mode>").hideHelp())
       .addHelpText(
         "after",
-        "\nSet DEV_REVIEW_SERVER_TOKEN in the server environment to keep its bearer credential stable across restarts. If unset, each process generates a new credential.\n",
+        "\nSet DEV_REVIEW_SERVER_TOKEN or DEV_REVIEW_SERVER_TOKEN_FILE in the server environment to keep its bearer credential stable across restarts. If unset, each process generates a new credential.\n",
       ),
     "plain",
   ).action(async (_options, command: Command) => {
     const options = command.optsWithGlobals<{
       stateDir?: string;
+      host: string;
       port: string;
+      advertiseUrl?: string;
       softwareMaps?: boolean;
       authoringMode?: string;
       json?: boolean;
@@ -289,7 +365,20 @@ export async function runReviewCli(input: ReviewCliInput): Promise<number> {
 
     if (!Number.isInteger(port) || port < 0 || port > 65535)
       throw new Error("--port must be an integer between 0 and 65535.");
+    const host = options.host.trim();
+
+    if (!host) throw new Error("--host must not be empty.");
+
+    const advertiseUrl = options.advertiseUrl
+      ? reviewServerAdvertiseUrl(options.advertiseUrl)
+      : undefined;
+
+    if (!isLoopbackHost(host) && !advertiseUrl)
+      throw new Error(
+        "--advertise-url is required when --host is not a loopback address.",
+      );
     const stateDir = reviewServerStateDir(authoringEnv(options.stateDir));
+    const token = await configuredReviewServerToken(env);
     const controller = new AbortController();
     const stop = () => controller.abort();
     process.once("SIGINT", stop);
@@ -299,9 +388,11 @@ export async function runReviewCli(input: ReviewCliInput): Promise<number> {
       const { runHeadlessServer } = await import("./server/headless-host.js");
       await runHeadlessServer({
         stateDir,
+        host,
         port,
+        advertiseUrl,
         softwareMapEnabled: options.softwareMaps,
-        token: env.DEV_REVIEW_SERVER_TOKEN,
+        token,
         signal: controller.signal,
         telemetry,
         onReady: ({ url, serverPid }) => {

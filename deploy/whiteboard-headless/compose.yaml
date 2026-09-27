@@ -1,0 +1,57 @@
+services:
+  whiteboard:
+    image: itissid/whiteboard-headless:local
+    build:
+      context: .
+    restart: unless-stopped
+    init: true
+    user: "1000:1000"
+    working_dir: /home/dev/workspace/whiteboard
+    environment:
+      DEV_FAST_REVIEW_TELEMETRY_DISABLED: "1"
+      DEV_REVIEW_SERVER_TOKEN_FILE: /run/secrets/review_server_token
+    secrets:
+      - review_server_token
+    command:
+      - server
+      - start
+      - --host
+      - 0.0.0.0
+      - --port
+      - "34125"
+      - --advertise-url
+      - http://whiteboard:34125
+      - --state-dir
+      - /home/dev/workspace/.service-data/whiteboard
+    volumes:
+      - /mnt/ServiceAndDataPool/projects:/home/dev/workspace
+    networks:
+      devnet:
+        aliases:
+          - whiteboard
+    expose:
+      - "34125"
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - |
+          const fs = require("node:fs");
+          const token = fs.readFileSync("/run/secrets/review_server_token", "utf8").trim();
+          fetch("http://127.0.0.1:34125/health", { headers: { "x-review-token": token } })
+            .then((response) => { if (!response.ok) process.exit(1); })
+            .catch(() => process.exit(1));
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 10s
+    stop_grace_period: 15s
+
+secrets:
+  review_server_token:
+    file: /mnt/ServiceAndDataPool/projects/.service-data/whiteboard/review-server-token
+
+networks:
+  devnet:
+    external: true

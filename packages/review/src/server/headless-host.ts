@@ -68,7 +68,9 @@ function applyWhiteboardDesktopCors(
 
 interface HeadlessServerInput {
   stateDir: string;
+  host?: string;
   port?: number;
+  advertiseUrl?: string;
   softwareMapEnabled?: boolean;
   token?: string;
   signal: AbortSignal;
@@ -294,13 +296,16 @@ async function serve(input: HeadlessServerInput) {
 
   try {
     const listening = once(server, "listening");
-    server.listen(input.port ?? 0, "127.0.0.1");
+    const host = input.host ?? "127.0.0.1";
+    server.listen(input.port ?? 0, host);
     await listening;
     const address = server.address();
 
     if (!isObjectValue(address))
       throw new Error("Review server did not bind a TCP port.");
-    discovery.url = `http://127.0.0.1:${address.port}`;
+    discovery.url =
+      input.advertiseUrl ??
+      `http://${host.includes(":") ? `[${host}]` : host}:${address.port}`;
     await writePrivateJsonAtomic(
       reviewServerDiscoveryPath(input.stateDir),
       discovery,
