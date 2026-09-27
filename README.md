@@ -7,7 +7,7 @@
   <h1>Whiteboard</h1>
   <p><strong>an open-source IDE for thoughtful software design</strong></p>
   <p>
-    <a href="https://install.dev.fast">Download for macOS</a> ·
+    <a href="docs/macos-remote-review-server-install.md">Build and install for macOS</a> ·
     <a href="https://dev.fast">Website</a> ·
     <a href="https://discord.gg/wYvd2cpMQg">Discord</a>
   </p>
@@ -27,9 +27,16 @@ Whiteboard plugs into the tools you already use - e.g. Claude Code, Codex, etc. 
 
 Here’s a 1 min demo video explaining more: https://www.youtube.com/watch?v=ChPn3ftULWE
 
+## Installation
+
+This fork runs the Whiteboard GUI on macOS while the persistent Review Server
+runs remotely on devbox. Follow the tested
+[macOS build, installation, and automatic-tunnel guide](docs/macos-remote-review-server-install.md).
+
 ## Quickstart
 
-1. [Download Whiteboard](https://install.dev.fast) and open the app.
+1. [Build and install Whiteboard with its automatic SSH tunnel](docs/macos-remote-review-server-install.md),
+   then open the app.
 2. Connect Claude Code, Codex, or another coding agent from the welcome screen.
 3. Ask your agent to review your current branch against up-to-date main and
    open the result in Whiteboard.
@@ -78,8 +85,10 @@ We found it difficult to reason about what set of decisions our agents made auto
 Whiteboard is MIT-licensed and runs against your local checkouts. A hosted
 product for teams is planned, and everything will always remain self-hostable.
 
-For this fork's split Linux-server/macOS-Desktop setup, see the
-[TrueNAS headless deployment guide](deploy/whiteboard-headless/DEPLOYMENT.md).
+For this fork's split Linux-server/macOS-Desktop setup, start with the
+[macOS installation guide](docs/macos-remote-review-server-install.md). The
+[TrueNAS headless deployment guide](deploy/whiteboard-headless/DEPLOYMENT.md)
+documents the remote Docker service itself.
 
 ## Known limitations
 
