@@ -23,6 +23,31 @@ The token is absent from argv, Compose YAML, the image, and the container enviro
 
 The container has `restart: unless-stopped`, so Docker restarts the existing container—including its secret mount—when the TrueNAS Docker engine restarts. A rebuild or interactive token prompt is not needed for an ordinary host restart.
 
+## Install the devbox agent client
+
+Pi sessions run on devbox, outside the server container. Install the fork-built CLI and the repository-owned Pi skill package with:
+
+```bash
+deploy/whiteboard-headless/install-agent-client.sh
+```
+
+The installer:
+
+1. builds `@dev.fast/review` from this checkout;
+2. links `whiteboard` and `review` into `~/.pi/agent/bin`, which is on Pi's `PATH`;
+3. configures those wrappers to use `/home/dev/workspace/.service-data/whiteboard` unless `DEV_REVIEW_SERVER_DIR` is already set; and
+4. installs the local `@dev.fast/pi-whiteboard` package through `pi install` without copying its skill into another repository.
+
+Existing Pi sessions must run `/reload` after installation. Verify from any devbox directory:
+
+```bash
+whiteboard server status
+whiteboard api session_get_instructions '{}'
+pi list
+```
+
+The CLI reads the server URL and bearer token from the protected discovery record in the configured state directory. Agents do not need the token in their environment.
+
 ## Persistent state
 
 The server uses:

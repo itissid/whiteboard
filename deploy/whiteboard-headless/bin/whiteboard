@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_path="$(readlink -f -- "${BASH_SOURCE[0]}")"
+repo_root="$(cd -- "$(dirname -- "$script_path")/../../.." && pwd)"
+
+export DEV_REVIEW_SERVER_DIR="${DEV_REVIEW_SERVER_DIR:-/home/dev/workspace/.service-data/whiteboard}"
+exec node "$repo_root/packages/review/dist/cli.js" "$@"
