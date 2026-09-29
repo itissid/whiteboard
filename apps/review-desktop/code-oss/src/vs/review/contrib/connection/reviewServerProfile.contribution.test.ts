@@ -86,9 +86,21 @@ test("the profile picker explicitly switches the selected Review store", async (
   assert.equal(reloads, 1);
 });
 
-test("editing credentials keeps the active profile identifier and hides the token prompt", async () => {
-  const profile = { id: "development", name: "Development", serverUrl: "http://127.0.0.1:5500", sourceAccessMode: "api-only" } as const;
-  const answers = ["Development renamed", "http://127.0.0.1:5700", "replacement-token"];
+test("editing a profile can replace its external source opener while hiding the token prompt", async () => {
+  const profile = {
+    id: "development",
+    name: "Development",
+    serverUrl: "http://127.0.0.1:5500",
+    sourceAccessMode: "api-only",
+    externalSourceOpener: { executable: "code", authority: "old-host" },
+  } as const;
+  const answers = [
+    "Development renamed",
+    "http://127.0.0.1:5700",
+    "replacement-token",
+    "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code",
+    "new-host",
+  ];
   const prompts: Array<Record<string, unknown>> = [];
   let edited: { id: string; input: unknown } | undefined;
   let reloads = 0;
@@ -112,12 +124,22 @@ test("editing credentials keeps the active profile identifier and hides the toke
 
   assert.deepEqual(edited, {
     id: profile.id,
-    input: { name: "Development renamed", serverUrl: "http://127.0.0.1:5700", token: "replacement-token" },
+    input: {
+      name: "Development renamed",
+      serverUrl: "http://127.0.0.1:5700",
+      token: "replacement-token",
+      externalSourceOpener: {
+        executable: "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code",
+        authority: "new-host",
+      },
+    },
   });
   assert.equal(prompts[0]?.value, profile.name);
   assert.equal(prompts[1]?.value, profile.serverUrl);
   assert.equal(prompts[2]?.password, true);
   assert.equal("value" in prompts[2]!, false);
+  assert.equal(prompts[3]?.value, profile.externalSourceOpener.executable);
+  assert.equal(prompts[4]?.value, profile.externalSourceOpener.authority);
   assert.equal(reloads, 1);
 });
 
@@ -126,7 +148,7 @@ test("the edit picker updates an inactive profile without changing the active Re
     { id: "development", name: "Development", serverUrl: "http://127.0.0.1:5500", sourceAccessMode: "api-only" },
     { id: "staging", name: "Staging", serverUrl: "http://127.0.0.1:5600", sourceAccessMode: "api-only" },
   ] as const;
-  const answers = ["Staging renamed", "http://127.0.0.1:5800", ""];
+  const answers = ["Staging renamed", "http://127.0.0.1:5800", "", ""];
   let edited: { id: string; input: unknown } | undefined;
   let reloads = 0;
 
@@ -144,7 +166,7 @@ test("the edit picker updates an inactive profile without changing the active Re
 
   assert.deepEqual(edited, {
     id: "staging",
-    input: { name: "Staging renamed", serverUrl: "http://127.0.0.1:5800" },
+    input: { name: "Staging renamed", serverUrl: "http://127.0.0.1:5800", externalSourceOpener: null },
   });
   assert.equal(reloads, 0);
 });

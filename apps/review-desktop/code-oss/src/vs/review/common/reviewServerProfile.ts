@@ -24,6 +24,8 @@ export interface UpdateRemoteReviewServerProfileInput {
   readonly serverUrl: string;
   /** Omit to keep the token already held in OS-backed secret storage. */
   readonly token?: string;
+  /** Omit to keep the existing opener; set null to remove it. */
+  readonly externalSourceOpener?: ReviewExternalSourceOpenerConfiguration | null;
 }
 
 export interface ReviewServerConnectionProfile {

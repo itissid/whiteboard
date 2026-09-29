@@ -10,7 +10,7 @@ Use the Command Palette to run:
 
 - **Whiteboard: Add Review Server Profile...** to save and select a named endpoint.
 - **Whiteboard: Switch Review Server Profile...** to select a different saved profile.
-- **Whiteboard: Edit Review Server Profile...** to change any saved profile's name, URL, or token.
+- **Whiteboard: Edit Review Server Profile...** to change any saved profile's name, URL, token, or external VS Code opener. The existing executable and Remote-SSH authority are prefilled; clear the executable to disable external source opening for that profile.
 - **Whiteboard: Remove Review Server Profile...** to remove a saved profile and its stored token.
 
 Selecting a profile is explicit and persists across Desktop restarts. Removing an inactive profile does not affect the active Review store. To remove an active profile while other profiles remain, switch to the intended replacement first. Removing the last profile explicitly returns Desktop to its default embedded Review Server.

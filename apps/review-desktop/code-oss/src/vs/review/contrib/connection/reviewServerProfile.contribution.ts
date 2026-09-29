@@ -12,6 +12,7 @@ import { IHostService } from "../../../workbench/services/host/browser/host.js";
 import type {
 	CreateRemoteReviewServerProfileInput,
 	ReviewServerConnectionProfile,
+	UpdateRemoteReviewServerProfileInput,
 } from "../../common/reviewServerProfile.js";
 import {
 	IReviewDesktopConnectionService,
@@ -32,6 +33,27 @@ function profilePickItems(snapshot: ReviewServerProfilesSnapshot): ReviewServerP
 		label: profile.name,
 		description: `${profile.id === snapshot.activeProfileId ? "Active · " : ""}${profile.serverUrl}`,
 	}));
+}
+
+async function promptExternalSourceOpener(
+	quickInput: IQuickInputService,
+	current?: ReviewServerConnectionProfile["externalSourceOpener"],
+): Promise<CreateRemoteReviewServerProfileInput["externalSourceOpener"] | null> {
+	const executable = await quickInput.input({
+		prompt: "Enter the Microsoft VS Code CLI executable path (leave blank to disable)",
+		placeHolder: "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code",
+		...(current ? { value: current.executable } : {}),
+		ignoreFocusLost: true,
+	});
+	if (executable === undefined) return undefined;
+	if (!executable.trim()) return null;
+	const authority = await quickInput.input({
+		prompt: "Enter the VS Code Remote-SSH authority",
+		placeHolder: "development-host",
+		...(current ? { value: current.authority } : {}),
+		ignoreFocusLost: true,
+	});
+	return authority === undefined ? undefined : { executable, authority };
 }
 
 export async function createRemoteProfileFromPrompts(
@@ -57,22 +79,8 @@ export async function createRemoteProfileFromPrompts(
 		ignoreFocusLost: true,
 	});
 	if (token === undefined) return;
-	const executable = await quickInput.input({
-		prompt: "Enter the Microsoft VS Code CLI executable path (leave blank to skip)",
-		placeHolder: "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code",
-		ignoreFocusLost: true,
-	});
-	if (executable === undefined) return;
-	let externalSourceOpener: CreateRemoteReviewServerProfileInput["externalSourceOpener"];
-	if (executable.trim()) {
-		const authority = await quickInput.input({
-			prompt: "Enter the VS Code Remote-SSH authority",
-			placeHolder: "development-host",
-			ignoreFocusLost: true,
-		});
-		if (authority === undefined) return;
-		externalSourceOpener = { executable, authority };
-	}
+	const externalSourceOpener = await promptExternalSourceOpener(quickInput);
+	if (externalSourceOpener === undefined) return;
 	await connection.createAndActivateRemoteProfile({
 		name,
 		serverUrl,
@@ -122,11 +130,15 @@ async function editRemoteProfileFromPrompts(
 		ignoreFocusLost: true,
 	});
 	if (token === undefined) return;
-	await connection.editRemoteProfile(profile.id, {
+	const externalSourceOpener = await promptExternalSourceOpener(quickInput, profile.externalSourceOpener);
+	if (externalSourceOpener === undefined) return;
+	const input: UpdateRemoteReviewServerProfileInput = {
 		name,
 		serverUrl,
 		...(token ? { token } : {}),
-	});
+		externalSourceOpener,
+	};
+	await connection.editRemoteProfile(profile.id, input);
 	if (reload) await host.reload();
 }
 

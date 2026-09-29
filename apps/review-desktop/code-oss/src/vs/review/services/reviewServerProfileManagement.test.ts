@@ -124,6 +124,43 @@ test("multiple profiles keep stable identifiers while metadata and profile-speci
 	assert.equal((settings.get(REVIEW_SERVER_PROFILE_SETTING) as ReviewServerConnectionProfiles).version, 1);
 });
 
+test("profile edits can replace and clear external source opener configuration without changing the secret", async (t) => {
+	const { createService, secrets } = setup();
+	mockFetch(t, compatibleResponse);
+	const service = createService();
+	t.after(() => service.dispose());
+
+	await service.createAndActivateRemoteProfile({
+		name: "Development",
+		serverUrl: "http://127.0.0.1:5500",
+		token: "development-token",
+		externalSourceOpener: { executable: "code", authority: "old-host" },
+	});
+	const profile = service.getRemoteProfiles().profiles[0]!;
+
+	await service.editRemoteProfile(profile.id, {
+		name: profile.name,
+		serverUrl: profile.serverUrl,
+		externalSourceOpener: {
+			executable: "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code",
+			authority: "new-host",
+		},
+	});
+	assert.deepEqual(service.getRemoteProfiles().profiles[0]!.externalSourceOpener, {
+		executable: "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code",
+		authority: "new-host",
+	});
+	assert.equal(secrets.get(reviewServerProfileTokenKey(profile.id)), "development-token");
+
+	await service.editRemoteProfile(profile.id, {
+		name: profile.name,
+		serverUrl: profile.serverUrl,
+		externalSourceOpener: null,
+	});
+	assert.equal(service.getRemoteProfiles().profiles[0]!.externalSourceOpener, undefined);
+	assert.equal(secrets.get(reviewServerProfileTokenKey(profile.id)), "development-token");
+});
+
 test("an explicit switch persists exactly one active profile across service lifecycles", async (t) => {
 	const { createService } = setup();
 	mockFetch(t, compatibleResponse);
