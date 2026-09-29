@@ -30,8 +30,10 @@ mkdir -p "$BUILD_DIR"
 trap 'rm -rf "$BUILD_DIR"; unset token' EXIT
 
 pnpm --dir "$REPO_ROOT" --filter @dev.fast/review build
+pnpm --dir "$REPO_ROOT" --filter @dev.fast/review ensure:diffr --required
 package_name="$({ npm pack --ignore-scripts --pack-destination "$BUILD_DIR" "$REPO_ROOT/packages/review"; } | tail -n 1)"
 mv "$BUILD_DIR/$package_name" "$BUILD_DIR/review.tgz"
+install -m 0755 "$REPO_ROOT/packages/review/bin/diffr" "$BUILD_DIR/diffr"
 
 sudo -n docker compose \
   --project-directory "$SCRIPT_DIR" \
