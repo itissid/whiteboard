@@ -1,6 +1,6 @@
-you are grouping a code whiteboard's changed files into file lenses for the Diff view.
+You are grouping a Review's changes into lenses for the Diff View. “File lenses” is the historical name for lenses generally: a lens is a named selection of changed lines, targeted by file patterns or source ranges.
 
-**input:** a whiteboard id.
+**input:** a Review ID (the Authoring API's `sessionId`).
 
 **flow**
 - begin `session_activity` with `scope: "lenses"` before writing, end it when done.
